@@ -13,6 +13,7 @@ export interface CalendarTask {
   title: string;
   due?: string; // ISO string
   completed: boolean;
+  notes?: string;
 }
 
 export interface ChatMessage {
@@ -20,6 +21,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: Date;
+  isStreaming?: boolean;
 }
 
 export enum CalendarViewType {

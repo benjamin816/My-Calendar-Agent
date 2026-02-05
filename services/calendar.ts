@@ -67,7 +67,7 @@ export const calendarService = {
       description: item.description,
       start: item.start.dateTime || item.start.date,
       end: item.end.dateTime || item.end.date,
-      color: item.colorId ? '#4285f4' : '#4285f4', // Simplified coloring
+      color: item.colorId ? '#4285f4' : '#4285f4',
     }));
   },
 
@@ -85,8 +85,8 @@ export const calendarService = {
     return {
       id: data.id,
       summary: data.summary,
-      start: data.start.dateTime,
-      end: data.end.dateTime,
+      start: data.start.dateTime || data.start.date,
+      end: data.end.dateTime || data.end.date,
     };
   },
 
@@ -101,7 +101,12 @@ export const calendarService = {
       method: 'PATCH',
       body: JSON.stringify(body),
     });
-    return data;
+    return {
+      id: data.id,
+      summary: data.summary,
+      start: data.start.dateTime || data.start.date,
+      end: data.end.dateTime || data.end.date,
+    };
   },
 
   deleteEvent: async (id: string): Promise<void> => {
@@ -109,18 +114,23 @@ export const calendarService = {
   },
 
   getTasks: async (): Promise<CalendarTask[]> => {
-    // Fetches from the default list
-    const lists = await tasksFetch('/users/@me/lists');
-    const defaultListId = lists.items?.[0]?.id;
-    if (!defaultListId) return [];
+    try {
+      const lists = await tasksFetch('/users/@me/lists');
+      const defaultListId = lists.items?.[0]?.id;
+      if (!defaultListId) return [];
 
-    const data = await tasksFetch(`/lists/${defaultListId}/tasks`);
-    return (data.items || []).map((item: any) => ({
-      id: item.id,
-      title: item.title,
-      due: item.due,
-      completed: item.status === 'completed',
-    }));
+      const data = await tasksFetch(`/lists/${defaultListId}/tasks`);
+      return (data.items || []).map((item: any) => ({
+        id: item.id,
+        title: item.title,
+        due: item.due,
+        completed: item.status === 'completed',
+        notes: item.notes,
+      }));
+    } catch (e) {
+      console.warn('Failed to fetch tasks', e);
+      return [];
+    }
   },
 
   createTask: async (task: Omit<CalendarTask, 'id'>): Promise<CalendarTask> => {
@@ -129,6 +139,7 @@ export const calendarService = {
     const body = {
       title: task.title,
       due: task.due ? new Date(task.due).toISOString() : undefined,
+      notes: task.notes,
     };
     const data = await tasksFetch(`/lists/${defaultListId}/tasks`, {
       method: 'POST',
@@ -153,6 +164,11 @@ export const calendarService = {
       method: 'PATCH',
       body: JSON.stringify(body),
     });
-    return data;
+    return {
+      id: data.id,
+      title: data.title,
+      due: data.due,
+      completed: data.status === 'completed',
+    };
   }
 };

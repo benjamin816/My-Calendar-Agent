@@ -1,5 +1,5 @@
 
-import { GoogleGenAI, Type, FunctionDeclaration, Modality } from "@google/genai";
+import { GoogleGenAI, Type, FunctionDeclaration, Modality, GenerateContentResponse } from "@google/genai";
 import { calendarService } from "./calendar";
 
 const calendarTools: FunctionDeclaration[] = [
@@ -20,10 +20,10 @@ const calendarTools: FunctionDeclaration[] = [
     parameters: {
       type: Type.OBJECT,
       properties: {
-        summary: { type: Type.STRING },
-        start: { type: Type.STRING, description: "ISO date string" },
-        end: { type: Type.STRING, description: "ISO date string" },
-        description: { type: Type.STRING }
+        summary: { type: Type.STRING, description: "The title of the event" },
+        start: { type: Type.STRING, description: "ISO date string for start time" },
+        end: { type: Type.STRING, description: "ISO date string for end time" },
+        description: { type: Type.STRING, description: "Details about the event" }
       },
       required: ["summary", "start", "end"]
     }
@@ -34,7 +34,7 @@ const calendarTools: FunctionDeclaration[] = [
     parameters: {
       type: Type.OBJECT,
       properties: {
-        id: { type: Type.STRING },
+        id: { type: Type.STRING, description: "Unique ID of the event to update" },
         summary: { type: Type.STRING },
         start: { type: Type.STRING },
         end: { type: Type.STRING },
@@ -49,7 +49,7 @@ const calendarTools: FunctionDeclaration[] = [
     parameters: {
       type: Type.OBJECT,
       properties: {
-        id: { type: Type.STRING }
+        id: { type: Type.STRING, description: "Unique ID of the event to remove" }
       },
       required: ["id"]
     }
@@ -64,10 +64,22 @@ const calendarTools: FunctionDeclaration[] = [
     parameters: {
       type: Type.OBJECT,
       properties: {
-        title: { type: Type.STRING },
-        due: { type: Type.STRING }
+        title: { type: Type.STRING, description: "Title of the task" },
+        due: { type: Type.STRING, description: "Optional due date (ISO string)" }
       },
       required: ["title"]
+    }
+  },
+  {
+    name: "mark_task_completed",
+    description: "Mark a task as completed or incomplete.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        id: { type: Type.STRING },
+        completed: { type: Type.BOOLEAN }
+      },
+      required: ["id", "completed"]
     }
   }
 ];
@@ -82,11 +94,11 @@ export class ChronosBrain {
       model: "gemini-3-flash-preview",
       config: {
         systemInstruction: `You are Chronos, a highly efficient calendar and task management agent. 
-        You have direct access to the user's calendar and tasks.
-        When a user asks to do something, check their schedule if needed. 
-        You can perform multiple actions at once (e.g., "Schedule a meeting and add a task").
-        Today is ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}.
-        Be concise, friendly, and helpful. If a time is ambiguous, ask for clarification.`,
+        You have direct access to the user's Google Calendar and Tasks.
+        Always check for conflicting events before creating new ones.
+        If a time is not provided for an event, ask the user. 
+        Current Context: ${new Date().toString()}.
+        Format your responses nicely. Mention specific dates and times when confirming actions.`,
         tools: [{ functionDeclarations: calendarTools }]
       }
     });
@@ -95,7 +107,7 @@ export class ChronosBrain {
   async processMessage(message: string, onUpdate: () => void) {
     let response = await this.chat.sendMessage({ message });
     
-    // Handle function calls
+    // Handle function calls recursively if needed
     while (response.functionCalls && response.functionCalls.length > 0) {
       const toolResults = [];
       
@@ -104,7 +116,7 @@ export class ChronosBrain {
         try {
           switch (call.name) {
             case "list_events":
-              result = await calendarService.getEvents();
+              result = await calendarService.getEvents(call.args.timeMin, call.args.timeMax);
               break;
             case "create_event":
               result = await calendarService.createEvent(call.args as any);
@@ -121,6 +133,9 @@ export class ChronosBrain {
             case "create_task":
               result = await calendarService.createTask(call.args as any);
               break;
+            case "mark_task_completed":
+              result = await calendarService.updateTask(call.args.id as string, { completed: call.args.completed });
+              break;
           }
         } catch (e: any) {
           result = `Error: ${e.message}`;
@@ -133,9 +148,10 @@ export class ChronosBrain {
         });
       }
 
-      onUpdate(); // Trigger UI refresh after actions
+      // Signal UI to refresh data
+      onUpdate();
 
-      // Send responses back to model
+      // Submit tool responses back to Gemini
       response = await this.chat.sendMessage({
         toolResponses: { functionResponses: toolResults }
       });
@@ -168,7 +184,6 @@ export class ChronosBrain {
   }
 }
 
-// Audio helpers
 export const decodeAudio = (base64: string) => {
   const binaryString = atob(base64);
   const bytes = new Uint8Array(binaryString.length);
