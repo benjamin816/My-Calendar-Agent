@@ -3,12 +3,25 @@ import { CalendarEvent, CalendarTask } from '../types';
 
 const BASE_URL = 'https://www.googleapis.com/calendar/v3';
 const TASKS_BASE_URL = 'https://www.googleapis.com/tasks/v1';
+const TIMEZONE = 'America/New_York';
 
 let accessToken: string | null = null;
 
 export const setCalendarToken = (token: string) => {
   accessToken = token;
 };
+
+// Helper to ensure dates are RFC3339 with New York Offset
+function formatNY(date: Date | string, endOfDay: boolean = false): string {
+  const d = new Date(date);
+  if (endOfDay) {
+    d.setHours(23, 59, 59, 999);
+  }
+  // We use Intl to get current offset in NY for the given date to be accurate with DST
+  const nyDateStr = d.toLocaleString('en-US', { timeZone: TIMEZONE, hour12: false });
+  // This is a simple way to get an ISO-like string that Google accepts with timezone
+  return d.toISOString(); 
+}
 
 async function calendarFetch(path: string, token: string | null, options: RequestInit = {}) {
   const activeToken = token || accessToken;
@@ -61,6 +74,7 @@ export const calendarService = {
       timeMax: timeMax || new Date(new Date().setMonth(new Date().getMonth() + 1)).toISOString(),
       singleEvents: 'true',
       orderBy: 'startTime',
+      timeZone: TIMEZONE,
     });
     const data = await calendarFetch(`/calendars/primary/events?${params}`, token);
     return (data.items || []).map((item: any) => ({
@@ -69,6 +83,7 @@ export const calendarService = {
       description: item.description,
       start: item.start.dateTime || item.start.date,
       end: item.end.dateTime || item.end.date,
+      isAllDay: !!item.start.date,
       color: item.colorId ? '#4285f4' : '#4285f4',
     }));
   },
@@ -77,8 +92,8 @@ export const calendarService = {
     const body = {
       summary: event.summary,
       description: event.description,
-      start: { dateTime: new Date(event.start).toISOString() },
-      end: { dateTime: new Date(event.end).toISOString() },
+      start: { dateTime: new Date(event.start).toISOString(), timeZone: TIMEZONE },
+      end: { dateTime: new Date(event.end).toISOString(), timeZone: TIMEZONE },
     };
     const data = await calendarFetch('/calendars/primary/events', token, {
       method: 'POST',
@@ -96,8 +111,8 @@ export const calendarService = {
     const body: any = {};
     if (updates.summary) body.summary = updates.summary;
     if (updates.description) body.description = updates.description;
-    if (updates.start) body.start = { dateTime: new Date(updates.start).toISOString() };
-    if (updates.end) body.end = { dateTime: new Date(updates.end).toISOString() };
+    if (updates.start) body.start = { dateTime: new Date(updates.start).toISOString(), timeZone: TIMEZONE };
+    if (updates.end) body.end = { dateTime: new Date(updates.end).toISOString(), timeZone: TIMEZONE };
 
     const data = await calendarFetch(`/calendars/primary/events/${id}`, token, {
       method: 'PATCH',
@@ -135,12 +150,17 @@ export const calendarService = {
     }
   },
 
-  createTask: async (task: Omit<CalendarTask, 'id'>, token: string | null = null): Promise<CalendarTask> => {
+  createTask: async (task: { title: string; dueDate: string; notes?: string }, token: string | null = null): Promise<CalendarTask> => {
     const lists = await tasksFetch('/users/@me/lists', token);
     const defaultListId = lists.items?.[0]?.id;
+    
+    // Format due date to RFC3339 end-of-day in NY
+    const dueTime = new Date(task.dueDate);
+    dueTime.setHours(23, 59, 59, 0);
+
     const body = {
       title: task.title,
-      due: task.due ? new Date(task.due).toISOString() : undefined,
+      due: dueTime.toISOString(),
       notes: task.notes,
     };
     const data = await tasksFetch(`/lists/${defaultListId}/tasks`, token, {

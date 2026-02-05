@@ -6,14 +6,23 @@ export interface CalendarEvent {
   start: string; // ISO string
   end: string;   // ISO string
   color?: string;
+  isAllDay?: boolean;
 }
 
 export interface CalendarTask {
   id: string;
   title: string;
-  due?: string; // ISO string
+  due?: string; // ISO string (Date only part matters)
   completed: boolean;
   notes?: string;
+}
+
+export interface UIPayload {
+  type: 'duration' | 'confirm';
+  action?: string;
+  options?: number[];
+  pending: any;
+  message?: string;
 }
 
 export interface ChatMessage {
@@ -22,6 +31,7 @@ export interface ChatMessage {
   content: string;
   timestamp: Date;
   isStreaming?: boolean;
+  ui?: UIPayload;
 }
 
 export enum CalendarViewType {

@@ -1,12 +1,12 @@
 
 export class ChronosBrain {
-  async processMessage(message: string, onUpdate: () => void, accessToken: string) {
+  async processMessage(message: string, onUpdate: () => void, accessToken: string, confirmed: boolean = false) {
     const response = await fetch('/api/gemini', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         action: 'chat',
-        payload: { message, accessToken }
+        payload: { message, accessToken, confirmed }
       })
     });
 
@@ -16,8 +16,8 @@ export class ChronosBrain {
     }
 
     const data = await response.json();
-    onUpdate(); // Refresh UI after server-side tool execution
-    return data.result;
+    onUpdate(); 
+    return data; // Returns { text, ui? }
   }
 
   async generateSpeech(text: string): Promise<string | null> {
@@ -29,9 +29,7 @@ export class ChronosBrain {
         payload: { text }
       })
     });
-
     if (!response.ok) return null;
-
     const data = await response.json();
     return data.result;
   }

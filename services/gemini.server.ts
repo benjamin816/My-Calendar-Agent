@@ -22,15 +22,15 @@ const calendarTools: FunctionDeclaration[] = [
       properties: {
         summary: { type: Type.STRING, description: "The title of the event" },
         start: { type: Type.STRING, description: "ISO date string for start time" },
-        end: { type: Type.STRING, description: "ISO date string for end time" },
+        end: { type: Type.STRING, description: "ISO date string for end time. If missing or same as start, it will trigger a duration prompt." },
         description: { type: Type.STRING, description: "Details about the event" }
       },
-      required: ["summary", "start", "end"]
+      required: ["summary", "start"]
     }
   },
   {
     name: "update_event",
-    description: "Update an existing calendar event.",
+    description: "Update an existing calendar event (including moving it).",
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -60,14 +60,14 @@ const calendarTools: FunctionDeclaration[] = [
   },
   {
     name: "create_task",
-    description: "Add a new task to the task list.",
+    description: "Add a new task to the task list. Requires a date.",
     parameters: {
       type: Type.OBJECT,
       properties: {
         title: { type: Type.STRING, description: "Title of the task" },
-        due: { type: Type.STRING, description: "Optional due date (ISO string)" }
+        dueDate: { type: Type.STRING, description: "Mandatory due date (YYYY-MM-DD format)" }
       },
-      required: ["title"]
+      required: ["title", "dueDate"]
     }
   },
   {
@@ -84,7 +84,7 @@ const calendarTools: FunctionDeclaration[] = [
   }
 ];
 
-export async function processChatAction(message: string, history: any[], accessToken: string) {
+export async function processChatAction(message: string, history: any[], accessToken: string, confirmed: boolean = false) {
   const apiKey = process.env.API_KEY;
   if (!apiKey) throw new Error("Missing API_KEY environment variable");
 
@@ -92,24 +92,58 @@ export async function processChatAction(message: string, history: any[], accessT
   const chat = ai.chats.create({
     model: "gemini-3-flash-preview",
     config: {
-      systemInstruction: `You are Chronos, a highly efficient calendar and task management agent. 
-      You have direct access to the user's Google Calendar and Tasks.
-      Always check for conflicting events before creating new ones.
-      If a time is not provided for an event, ask the user. 
-      Current Context: ${new Date().toString()}.
-      Format your responses nicely using Markdown. Mention specific dates and times when confirming actions.`,
+      systemInstruction: `You are Chronos, a calendar agent.
+      Timezone: America/New_York. 
+      Current Time: ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })}.
+      
+      RULES:
+      1. When creating an event, if the user doesn't specify an end time or duration, provide the start time to the 'create_event' tool. The system will handle the prompt.
+      2. When moving or updating an event's time, the system will intercept and ask for confirmation.
+      3. Tasks MUST have a dueDate (YYYY-MM-DD). If not provided, ask the user. Ignore task times, only use dates.
+      4. Always use Markdown for responses.`,
       tools: [{ functionDeclarations: calendarTools }]
     },
     history: history
   });
 
-  // Initial message to the model
   let response = await chat.sendMessage({ message });
   
-  // Handle sequential or parallel function calls
-  while (response.functionCalls && response.functionCalls.length > 0) {
+  if (response.functionCalls && response.functionCalls.length > 0) {
+    const firstCall = response.functionCalls[0];
+
+    // Intercept Create Event for Duration
+    if (firstCall.name === "create_event") {
+      const args = firstCall.args as any;
+      if (!args.end || args.end === args.start) {
+        return {
+          text: "How long should this event be?",
+          ui: {
+            type: 'duration',
+            options: [15, 30, 45, 60, 120, 180],
+            pending: { action: 'create_event', args: args }
+          }
+        };
+      }
+    }
+
+    // Intercept Move/Update Event for Confirmation (unless already confirmed)
+    if (firstCall.name === "update_event" && !confirmed) {
+      const args = firstCall.args as any;
+      if (args.start || args.end) {
+        return {
+          text: `I'm ready to update that event. Should I proceed?`,
+          ui: {
+            type: 'confirm',
+            action: 'update_event',
+            pending: { action: 'update_event', args: args },
+            message: `Update event "${args.summary || 'selected event'}" to ${args.start ? new Date(args.start).toLocaleString() : 'new time'}?`
+          }
+        };
+      }
+    }
+
+    // Process Tools
     const functionResponseParts: Part[] = [];
-    
     for (const call of response.functionCalls) {
       let apiResult: any;
       try {
@@ -125,7 +159,7 @@ export async function processChatAction(message: string, history: any[], accessT
             break;
           case "delete_event":
             await calendarService.deleteEvent(call.args.id as string, accessToken);
-            apiResult = { status: "deleted", id: call.args.id };
+            apiResult = { status: "deleted" };
             break;
           case "list_tasks":
             apiResult = await calendarService.getTasks(accessToken);
@@ -136,48 +170,32 @@ export async function processChatAction(message: string, history: any[], accessT
           case "mark_task_completed":
             apiResult = await calendarService.updateTask(call.args.id as string, { completed: call.args.completed as boolean }, accessToken);
             break;
-          default:
-            apiResult = { error: "Unknown tool called" };
         }
       } catch (e: any) {
-        apiResult = { error: e.message || "Operation failed" };
+        apiResult = { error: e.message };
       }
-      
-      // The response must be an object as per SDK requirements
       functionResponseParts.push({
-        functionResponse: {
-          name: call.name,
-          response: { result: apiResult }
-        }
+        functionResponse: { name: call.name, response: { result: apiResult } }
       });
     }
 
-    // Send results back to the model in the required array format
-    response = await chat.sendMessage({
-      message: functionResponseParts
-    });
+    response = await chat.sendMessage({ message: functionResponseParts });
   }
 
-  return response.text;
+  return { text: response.text };
 }
 
 export async function processTTSAction(text: string) {
   const apiKey = process.env.API_KEY;
   if (!apiKey) throw new Error("Missing API_KEY environment variable");
-
   const ai = new GoogleGenAI({ apiKey });
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash-preview-tts",
     contents: [{ parts: [{ text }] }],
     config: {
       responseModalities: [Modality.AUDIO],
-      speechConfig: {
-        voiceConfig: {
-          prebuiltVoiceConfig: { voiceName: 'Kore' },
-        },
-      },
+      speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
     },
   });
-
   return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data || null;
 }
