@@ -11,11 +11,11 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'chat') {
-      const { message, history = [], accessToken } = payload;
+      const { message, history = [], accessToken, clientContext } = payload;
       if (!accessToken) {
         return NextResponse.json({ error: "Missing Google Access Token" }, { status: 400 });
       }
-      const result = await processChatAction(message, history, accessToken);
+      const result = await processChatAction(message, history, accessToken, clientContext);
       return NextResponse.json({ result });
     }
 

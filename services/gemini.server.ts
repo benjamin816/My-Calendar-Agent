@@ -65,9 +65,9 @@ const calendarTools: FunctionDeclaration[] = [
       type: Type.OBJECT,
       properties: {
         title: { type: Type.STRING, description: "Title of the task" },
-        due: { type: Type.STRING, description: "Optional due date (ISO string)" }
+        due: { type: Type.STRING, description: "Mandatory due date (ISO string at midnight or start of day)" }
       },
-      required: ["title"]
+      required: ["title", "due"]
     }
   },
   {
@@ -84,7 +84,7 @@ const calendarTools: FunctionDeclaration[] = [
   }
 ];
 
-export async function processChatAction(message: string, history: any[], accessToken: string) {
+export async function processChatAction(message: string, history: any[], accessToken: string, clientContext?: string) {
   const apiKey = process.env.API_KEY;
   if (!apiKey) throw new Error("Missing API_KEY environment variable");
 
@@ -93,20 +93,26 @@ export async function processChatAction(message: string, history: any[], accessT
     model: "gemini-3-flash-preview",
     config: {
       systemInstruction: `You are Chronos, a highly efficient calendar and task management agent. 
-      You have direct access to the user's Google Calendar and Tasks.
-      Always check for conflicting events before creating new ones.
-      If a time is not provided for an event, ask the user. 
-      Current Context: ${new Date().toString()}.
-      Format your responses nicely using Markdown. Mention specific dates and times when confirming actions.`,
+      Access to Google Calendar and Tasks is active.
+
+      CORE RULES:
+      1. TIMEZONE SENSITIVITY: Always use the user's local context provided: ${clientContext || new Date().toString()}.
+      2. EVENT CREATION: When a user wants to schedule something:
+         - Ask for the duration if not specified (default 1h). 
+         - Explicitly mention the duration options: 15m, 30m, 45m, 1h, 2h, 3h.
+      3. CONFIRMATION: Always ask "Is this correct?" before moving, deleting, or updating an event. Do not execute tool until confirmed.
+      4. TASKS: Always demand a due date for tasks. Tasks are for whole days, events are for specific times. 
+      5. PRECISION: If a user says "6 PM tomorrow", ensure the 'start' parameter is exactly 18:00 local time on that day.
+      6. RESPONSE: Keep it snappy. No long introductions. Just "Scheduled [Event] for [Time]" or "Created task [Task] for [Date]".
+
+      Format responses in Markdown.`,
       tools: [{ functionDeclarations: calendarTools }]
     },
     history: history
   });
 
-  // Initial message to the model
   let response = await chat.sendMessage({ message });
   
-  // Handle sequential or parallel function calls
   while (response.functionCalls && response.functionCalls.length > 0) {
     const functionResponseParts: Part[] = [];
     
@@ -143,7 +149,6 @@ export async function processChatAction(message: string, history: any[], accessT
         apiResult = { error: e.message || "Operation failed" };
       }
       
-      // The response must be an object as per SDK requirements
       functionResponseParts.push({
         functionResponse: {
           name: call.name,
@@ -152,7 +157,6 @@ export async function processChatAction(message: string, history: any[], accessT
       });
     }
 
-    // Send results back to the model in the required array format
     response = await chat.sendMessage({
       message: functionResponseParts
     });

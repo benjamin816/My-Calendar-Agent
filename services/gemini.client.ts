@@ -1,12 +1,18 @@
 
 export class ChronosBrain {
   async processMessage(message: string, onUpdate: () => void, accessToken: string) {
+    const clientContext = `${new Date().toString()} (Timezone Offset: ${new Date().getTimezoneOffset()} mins)`;
+    
     const response = await fetch('/api/gemini', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         action: 'chat',
-        payload: { message, accessToken }
+        payload: { 
+          message, 
+          accessToken,
+          clientContext 
+        }
       })
     });
 
