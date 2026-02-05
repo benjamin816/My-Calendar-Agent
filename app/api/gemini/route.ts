@@ -6,8 +6,8 @@ export async function POST(req: NextRequest) {
   try {
     const { action, payload } = await req.json();
 
-    if (!process.env.GEMINI_API_KEY) {
-      return NextResponse.json({ error: "Missing GEMINI_API_KEY" }, { status: 500 });
+    if (!process.env.API_KEY) {
+      return NextResponse.json({ error: "Missing API_KEY" }, { status: 500 });
     }
 
     if (action === 'chat') {

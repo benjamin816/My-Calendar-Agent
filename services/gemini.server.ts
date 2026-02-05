@@ -1,5 +1,5 @@
 
-import { GoogleGenAI, Type, FunctionDeclaration, Modality } from "@google/genai";
+import { GoogleGenAI, Type, FunctionDeclaration, Modality, Part } from "@google/genai";
 import { calendarService } from "./calendar";
 
 const calendarTools: FunctionDeclaration[] = [
@@ -85,8 +85,8 @@ const calendarTools: FunctionDeclaration[] = [
 ];
 
 export async function processChatAction(message: string, history: any[], accessToken: string) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("Missing GEMINI_API_KEY");
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) throw new Error("Missing API_KEY environment variable");
 
   const ai = new GoogleGenAI({ apiKey });
   const chat = ai.chats.create({
@@ -97,56 +97,64 @@ export async function processChatAction(message: string, history: any[], accessT
       Always check for conflicting events before creating new ones.
       If a time is not provided for an event, ask the user. 
       Current Context: ${new Date().toString()}.
-      Format your responses nicely. Mention specific dates and times when confirming actions.`,
+      Format your responses nicely using Markdown. Mention specific dates and times when confirming actions.`,
       tools: [{ functionDeclarations: calendarTools }]
     },
     history: history
   });
 
+  // Initial message to the model
   let response = await chat.sendMessage({ message });
   
+  // Handle sequential or parallel function calls
   while (response.functionCalls && response.functionCalls.length > 0) {
-    const toolResults = [];
+    const functionResponseParts: Part[] = [];
     
     for (const call of response.functionCalls) {
-      let result: any = "Success";
+      let apiResult: any;
       try {
         switch (call.name) {
           case "list_events":
-            result = await calendarService.getEvents(call.args.timeMin as string, call.args.timeMax as string, accessToken);
+            apiResult = await calendarService.getEvents(call.args.timeMin as string, call.args.timeMax as string, accessToken);
             break;
           case "create_event":
-            result = await calendarService.createEvent(call.args as any, accessToken);
+            apiResult = await calendarService.createEvent(call.args as any, accessToken);
             break;
           case "update_event":
-            result = await calendarService.updateEvent(call.args.id as string, call.args, accessToken);
+            apiResult = await calendarService.updateEvent(call.args.id as string, call.args as any, accessToken);
             break;
           case "delete_event":
             await calendarService.deleteEvent(call.args.id as string, accessToken);
+            apiResult = { status: "deleted", id: call.args.id };
             break;
           case "list_tasks":
-            result = await calendarService.getTasks(accessToken);
+            apiResult = await calendarService.getTasks(accessToken);
             break;
           case "create_task":
-            result = await calendarService.createTask(call.args as any, accessToken);
+            apiResult = await calendarService.createTask(call.args as any, accessToken);
             break;
           case "mark_task_completed":
-            result = await calendarService.updateTask(call.args.id as string, { completed: call.args.completed as boolean }, accessToken);
+            apiResult = await calendarService.updateTask(call.args.id as string, { completed: call.args.completed as boolean }, accessToken);
             break;
+          default:
+            apiResult = { error: "Unknown tool called" };
         }
       } catch (e: any) {
-        result = `Error: ${e.message}`;
+        apiResult = { error: e.message || "Operation failed" };
       }
       
-      toolResults.push({
-        id: call.id,
-        name: call.name,
-        response: { result }
+      // The response must be an object as per SDK requirements
+      functionResponseParts.push({
+        functionResponse: {
+          name: call.name,
+          response: { result: apiResult }
+        }
       });
     }
 
+    // Send results back to the model in the required array format
     response = await chat.sendMessage({
-      toolResponses: { functionResponses: toolResults }
+      message: functionResponseParts
     });
   }
 
@@ -154,8 +162,8 @@ export async function processChatAction(message: string, history: any[], accessT
 }
 
 export async function processTTSAction(text: string) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("Missing GEMINI_API_KEY");
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) throw new Error("Missing API_KEY environment variable");
 
   const ai = new GoogleGenAI({ apiKey });
   const response = await ai.models.generateContent({
