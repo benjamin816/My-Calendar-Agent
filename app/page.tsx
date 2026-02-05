@@ -6,7 +6,7 @@ import { useSession, signIn, signOut } from "next-auth/react";
 import { CalendarEvent, CalendarTask, ChatMessage, CalendarViewType } from '../types';
 import { calendarService, setCalendarToken } from '../services/calendar';
 import { ChronosBrain, decodeAudio, playPcmAudio } from '../services/gemini.client';
-import { format, startOfWeek, endOfWeek, eachDayOfInterval, addDays, isSameDay, parseISO, compareAsc } from 'date-fns';
+import { format, startOfWeek, endOfWeek, eachDayOfInterval, addDays, isSameDay, parseISO } from 'date-fns';
 import { 
   CalendarIcon, 
   ChatBubbleLeftRightIcon, 
@@ -22,8 +22,7 @@ import {
   Squares2X2Icon,
   ListBulletIcon,
   PaperAirplaneIcon,
-  ArrowLeftOnRectangleIcon,
-  ClockIcon
+  ArrowLeftOnRectangleIcon
 } from '@heroicons/react/24/outline';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -152,15 +151,12 @@ export default function ChronosApp() {
     return eachDayOfInterval({ start, end });
   }, [currentDate]);
 
-  const getDayItems = (day: Date) => {
-    const dayEvents = events.filter(e => isSameDay(parseISO(e.start), day));
-    const dayTasks = tasks.filter(t => t.due && isSameDay(parseISO(t.due), day));
-    
-    const sorted = [...dayEvents.map(e => ({ type: 'event' as const, ...e })), ...dayTasks.map(t => ({ type: 'task' as const, ...t }))];
-    return sorted.sort((a, b) => {
-      const timeA = 'start' in a ? parseISO(a.start) : parseISO(a.due!);
-      const timeB = 'start' in b ? parseISO(b.start) : parseISO(b.due!);
-      return compareAsc(timeA, timeB);
+  const hourRows = Array.from({ length: 15 }, (_, i) => i + 7);
+
+  const getEventsForDayAndHour = (day: Date, hour: number) => {
+    return events.filter(e => {
+      const start = parseISO(e.start);
+      return isSameDay(start, day) && start.getHours() === hour;
     });
   };
 
@@ -173,17 +169,6 @@ export default function ChronosApp() {
       console.error(e);
     }
   };
-
-  // Logic to show duration buttons if the last assistant message mentions duration
-  const showDurationPresets = useMemo(() => {
-    if (messages.length === 0 || isProcessing) return false;
-    const lastMsg = messages[messages.length - 1];
-    return lastMsg.role === 'assistant' && (
-      lastMsg.content.toLowerCase().includes('how long') || 
-      lastMsg.content.toLowerCase().includes('duration') ||
-      lastMsg.content.toLowerCase().includes('minutes')
-    );
-  }, [messages, isProcessing]);
 
   if (status === "loading") {
     return (
@@ -250,6 +235,10 @@ export default function ChronosApp() {
             onClick={() => setActiveTab('tasks')} 
           />
           <SidebarItem 
+            icon={<BellIcon className="w-6 h-6" />} 
+            label="Notifications" 
+          />
+          <SidebarItem 
             icon={<Cog6ToothIcon className="w-6 h-6" />} 
             label="Settings" 
             active={activeTab === 'settings'}
@@ -302,12 +291,9 @@ export default function ChronosApp() {
             >
               <ArrowPathIcon className={cn("w-5 h-5", isProcessing && "animate-spin")} />
             </button>
-            <button 
-              onClick={() => handleSendMessage("Show my agenda for this week")}
-              className="bg-blue-600 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-md hover:shadow-lg hover:bg-blue-700 transition-all active:scale-95 flex items-center gap-2"
-            >
+            <button className="bg-blue-600 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-md hover:shadow-lg hover:bg-blue-700 transition-all active:scale-95 flex items-center gap-2">
               <PlusIcon className="w-5 h-5" />
-              <span>Ask Chronos</span>
+              <span>Create Event</span>
             </button>
           </div>
         </header>
@@ -315,9 +301,10 @@ export default function ChronosApp() {
         <main className="flex-1 overflow-hidden flex flex-col p-6 space-y-6">
           {activeTab === 'calendar' && (
             <div className="flex-1 bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-              <div className="grid grid-cols-7 border-b border-slate-100 bg-slate-50/50">
+              <div className="grid grid-cols-[80px_repeat(7,1fr)] border-b border-slate-100 bg-slate-50/50">
+                <div className="h-14" />
                 {weekDays.map(day => (
-                  <div key={day.toISOString()} className="flex flex-col items-center justify-center py-3 border-l first:border-l-0 border-slate-100">
+                  <div key={day.toISOString()} className="flex flex-col items-center justify-center py-3 border-l border-slate-100">
                     <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">{format(day, 'EEE')}</span>
                     <span className={cn(
                       "text-xl font-bold mt-1 h-9 w-9 flex items-center justify-center rounded-full transition-colors",
@@ -329,48 +316,39 @@ export default function ChronosApp() {
                 ))}
               </div>
 
-              <div className="flex-1 grid grid-cols-7 overflow-hidden">
-                {weekDays.map(day => (
-                  <div key={day.toISOString()} className="border-l first:border-l-0 border-slate-100 overflow-y-auto custom-scrollbar p-3 space-y-3 bg-white/50">
-                    {getDayItems(day).map((item: any) => (
-                      <div 
-                        key={item.id} 
-                        className={cn(
-                          "p-3 rounded-2xl border transition-all cursor-pointer group/card",
-                          item.type === 'event' 
-                            ? "bg-blue-50/50 border-blue-100 hover:border-blue-300" 
-                            : "bg-slate-50/80 border-slate-100 hover:border-slate-300"
-                        )}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                           <p className={cn("text-xs font-bold leading-tight", item.type === 'event' ? "text-blue-900" : "text-slate-900")}>
-                             {item.type === 'event' ? item.summary : item.title}
-                           </p>
-                           {item.type === 'event' && <div className="w-1.5 h-1.5 rounded-full bg-blue-500 mt-1" />}
+              <div className="flex-1 overflow-y-auto custom-scrollbar relative">
+                {hourRows.map(hour => (
+                  <div key={hour} className="grid grid-cols-[80px_repeat(7,1fr)] min-h-[100px] border-b border-slate-50 group">
+                    <div className="text-right pr-4 pt-4 text-xs font-bold text-slate-300">
+                      {hour > 12 ? `${hour - 12} PM` : `${hour} AM`}
+                    </div>
+                    {weekDays.map(day => {
+                      const dayEvents = getEventsForDayAndHour(day, hour);
+                      return (
+                        <div key={day.toISOString()} className="border-l border-slate-50 p-1 relative group-hover:bg-slate-50/30 transition-colors">
+                          {dayEvents.map(e => (
+                            <div 
+                              key={e.id} 
+                              className="bg-blue-50 border-l-4 border-blue-500 p-2.5 rounded-r-lg mb-1 shadow-sm hover:shadow-md transition-all cursor-pointer group/event overflow-hidden"
+                            >
+                              <p className="text-xs font-bold text-blue-900 truncate leading-tight">{e.summary}</p>
+                              <p className="text-[10px] text-blue-700/70 font-medium mt-0.5">{format(parseISO(e.start), 'h:mm a')}</p>
+                            </div>
+                          ))}
                         </div>
-                        
-                        <div className="flex items-center gap-1.5 mt-2">
-                          <ClockIcon className="w-3 h-3 text-slate-400" />
-                          <p className="text-[10px] font-bold text-slate-400">
-                             {item.type === 'event' ? format(parseISO(item.start), 'h:mm a') : 'All Day'}
-                          </p>
-                        </div>
-
-                        {item.type === 'task' && item.completed && (
-                          <div className="mt-2 flex items-center gap-1 text-[10px] text-green-600 font-bold">
-                             <CheckIcon className="w-3 h-3" />
-                             Done
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                    {getDayItems(day).length === 0 && (
-                      <div className="h-full flex flex-col items-center justify-center opacity-20 py-20">
-                         <CalendarIcon className="w-10 h-10 text-slate-300" />
-                      </div>
-                    )}
+                      );
+                    })}
                   </div>
                 ))}
+                
+                {isSameDay(currentDate, new Date()) && (
+                  <div 
+                    className="absolute left-[80px] right-0 border-t-2 border-red-500 z-10 pointer-events-none flex items-center"
+                    style={{ top: `${((new Date().getHours() - 7) * 100) + (new Date().getMinutes() / 60 * 100)}px` }}
+                  >
+                    <div className="w-3 h-3 bg-red-500 rounded-full -ml-1.5 shadow-sm" />
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -499,8 +477,8 @@ export default function ChronosApp() {
                 <h4 className="font-bold text-slate-800">Hello, I'm Chronos</h4>
                 <p className="text-sm text-slate-500 leading-relaxed">
                   I can manage your schedule and tasks. Try saying:<br/>
-                  <span className="italic">"Schedule a dinner date tomorrow at 6 PM"</span> or 
-                  <span className="italic"> "What's my agenda for today?"</span>
+                  <span className="italic">"Schedule a meeting with Sarah for tomorrow at 2 PM"</span> or 
+                  <span className="italic"> "What's my agenda for this week?"</span>
                 </p>
              </div>
           )}
@@ -513,7 +491,7 @@ export default function ChronosApp() {
                   ? 'bg-blue-600 text-white rounded-tr-none' 
                   : m.role === 'system'
                   ? 'bg-red-50 text-red-600 border border-red-100 rounded-tl-none'
-                  : 'bg-white border border-slate-100 text-slate-800 rounded-tl-none font-medium whitespace-pre-wrap'
+                  : 'bg-white border border-slate-100 text-slate-800 rounded-tl-none font-medium'
               )}>
                 {m.content}
               </div>
@@ -535,21 +513,7 @@ export default function ChronosApp() {
           <div ref={chatEndRef} />
         </div>
 
-        <div className="p-6 border-t border-slate-100 bg-white">
-          {showDurationPresets && (
-            <div className="flex flex-wrap gap-2 mb-4 animate-in slide-in-from-bottom-4">
-              {['15m', '30m', '45m', '1h', '2h', '3h'].map(preset => (
-                <button
-                  key={preset}
-                  onClick={() => handleSendMessage(preset)}
-                  className="px-3 py-1.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-full text-xs font-bold hover:bg-blue-600 hover:text-white transition-all active:scale-95"
-                >
-                  {preset}
-                </button>
-              ))}
-            </div>
-          )}
-
+        <div className="p-8 border-t border-slate-100 bg-white">
           <div className="relative group">
             <input 
               value={inputText}
