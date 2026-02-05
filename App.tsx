@@ -13,10 +13,12 @@ import {
   ChevronLeftIcon, 
   ChevronRightIcon,
   ArrowRightOnRectangleIcon,
-  UserCircleIcon
+  UserCircleIcon,
+  InformationCircleIcon,
+  ClipboardIcon
 } from '@heroicons/react/24/outline';
 
-const CLIENT_ID = '171928887280-fogep1i46dnqfla2igkv0cjk16vi03at.apps.googleusercontent.com'; // Ideally set via env or config
+const CLIENT_ID = '171928887280-fogep1i46dnqfla2igkv0cjk16vi03at.apps.googleusercontent.com';
 
 const App: React.FC = () => {
   const [token, setToken] = useState<string | null>(localStorage.getItem('google_calendar_token'));
@@ -29,6 +31,7 @@ const App: React.FC = () => {
   const [isListening, setIsListening] = useState(false);
   const [viewType, setViewType] = useState<CalendarViewType>(CalendarViewType.WEEK);
   const [currentDate, setCurrentDate] = useState(new Date());
+  const [showDebug, setShowDebug] = useState(false);
 
   const brainRef = useRef<ChronosBrain | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -39,17 +42,24 @@ const App: React.FC = () => {
   useEffect(() => {
     const initGsi = () => {
       if (!(window as any).google) return;
-      tokenClientRef.current = (window as any).google.accounts.oauth2.initTokenClient({
-        client_id: CLIENT_ID,
-        scope: 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/tasks',
-        callback: (resp: any) => {
-          if (resp.error) return;
-          setToken(resp.access_token);
-          setCalendarToken(resp.access_token);
-          localStorage.setItem('google_calendar_token', resp.access_token);
-          refreshData();
-        },
-      });
+      try {
+        tokenClientRef.current = (window as any).google.accounts.oauth2.initTokenClient({
+          client_id: CLIENT_ID,
+          scope: 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/tasks https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email',
+          callback: (resp: any) => {
+            if (resp.error) {
+              console.error("Auth Error:", resp);
+              return;
+            }
+            setToken(resp.access_token);
+            setCalendarToken(resp.access_token);
+            localStorage.setItem('google_calendar_token', resp.access_token);
+            refreshData();
+          },
+        });
+      } catch (err) {
+        console.error("Failed to init GIS", err);
+      }
     };
     
     const checkGsi = setInterval(() => {
@@ -85,7 +95,7 @@ const App: React.FC = () => {
     if (tokenClientRef.current) {
       tokenClientRef.current.requestAccessToken({ prompt: 'consent' });
     } else {
-      alert("Google Identity Services not initialized. Is the Client ID correct?");
+      alert("Google Identity Services not initialized yet. Please wait a moment.");
     }
   };
 
@@ -97,11 +107,8 @@ const App: React.FC = () => {
     localStorage.removeItem('google_calendar_token');
   };
 
-  // Initialize brain and data
   useEffect(() => {
     brainRef.current = new ChronosBrain();
-    
-    // Setup Speech Recognition
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
       const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       recognitionRef.current = new SpeechRecognition();
@@ -132,11 +139,9 @@ const App: React.FC = () => {
     }
   }, [token]);
 
-  const scrollToBottom = () => {
+  useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  useEffect(scrollToBottom, [messages]);
+  }, [messages]);
 
   const handleSendMessage = async (text?: string) => {
     const messageToSend = text || inputText;
@@ -188,15 +193,21 @@ const App: React.FC = () => {
     }
   };
 
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    alert("Copied to clipboard!");
+  };
+
   if (!token) {
     return (
-      <div className="h-screen flex items-center justify-center bg-slate-50">
+      <div className="h-screen flex items-center justify-center bg-slate-50 p-6">
         <div className="max-w-md w-full bg-white p-10 rounded-3xl shadow-xl text-center space-y-6">
           <div className="w-20 h-20 bg-blue-600 rounded-2xl flex items-center justify-center text-white text-4xl font-bold mx-auto shadow-lg">C</div>
           <div>
             <h1 className="text-3xl font-extrabold text-slate-800 tracking-tight">Chronos AI</h1>
             <p className="text-slate-500 mt-2">Connect your Google account to manage your life with AI.</p>
           </div>
+          
           <button 
             onClick={handleLogin}
             className="w-full flex items-center justify-center gap-3 py-4 px-6 bg-white border border-slate-200 rounded-2xl font-bold text-slate-700 hover:bg-slate-50 transition-all shadow-sm"
@@ -204,7 +215,29 @@ const App: React.FC = () => {
             <img src="https://www.gstatic.com/images/branding/product/1x/gsa_512dp.png" className="w-6 h-6" alt="Google" />
             Sign in with Google
           </button>
-          <p className="text-xs text-slate-400">Requires access to your Calendar and Tasks.</p>
+
+          <div className="pt-4 border-t border-slate-100">
+            <button 
+              onClick={() => setShowDebug(!showDebug)}
+              className="text-xs text-blue-600 font-medium flex items-center gap-1 mx-auto hover:underline"
+            >
+              <InformationCircleIcon className="w-4 h-4" />
+              {showDebug ? "Hide Setup Info" : "Fixing 'Error 400: invalid_request'?"}
+            </button>
+            
+            {showDebug && (
+              <div className="mt-4 text-left p-4 bg-slate-50 rounded-xl space-y-3">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Authorized JavaScript Origin</p>
+                <div className="flex items-center gap-2 bg-white p-2 rounded border border-slate-200">
+                  <code className="text-[10px] flex-1 truncate">{window.location.origin}</code>
+                  <button onClick={() => copyToClipboard(window.location.origin)} className="p-1 hover:bg-slate-100 rounded">
+                    <ClipboardIcon className="w-3 h-3 text-slate-400" />
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-500 italic">Add the URL above to your Google Cloud Console under "Authorized JavaScript origins".</p>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -214,13 +247,11 @@ const App: React.FC = () => {
     <div className="flex h-screen bg-slate-50 overflow-hidden">
       {/* Sidebar - Calendar & Tasks */}
       <div className="flex-1 flex flex-col min-w-0 border-r border-slate-200">
-        {/* Header */}
         <header className="h-16 flex items-center justify-between px-6 bg-white border-b border-slate-200">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold">C</div>
             <h1 className="text-xl font-bold tracking-tight text-slate-800">Chronos AI</h1>
           </div>
-          
           <div className="flex items-center gap-4">
             <div className="flex bg-slate-100 rounded-lg p-1">
               {Object.values(CalendarViewType).map(v => (
@@ -242,14 +273,11 @@ const App: React.FC = () => {
           </div>
         </header>
 
-        {/* Content Area */}
         <main className="flex-1 flex overflow-hidden">
-          {/* Calendar Grid */}
           <div className="flex-1 overflow-y-auto p-6 custom-scrollbar bg-slate-50/50">
             <CalendarGrid events={events} currentDate={currentDate} />
           </div>
 
-          {/* Right Panel - Tasks & Profile */}
           <div className="w-80 bg-white border-l border-slate-200 flex flex-col">
             <div className="p-6 border-b border-slate-50">
               <div className="flex items-center justify-between mb-6">
@@ -275,7 +303,6 @@ const App: React.FC = () => {
               </div>
             </div>
             
-            {/* User Profile Footer */}
             <div className="mt-auto p-6 border-t border-slate-100 bg-slate-50/30">
               <div className="flex items-center gap-3">
                 {user?.picture ? (
@@ -296,7 +323,6 @@ const App: React.FC = () => {
         </main>
       </div>
 
-      {/* Chat Agent Panel */}
       <div className="w-96 bg-white flex flex-col shadow-2xl z-10">
         <div className="h-16 flex items-center px-6 border-b border-slate-100">
           <ChatBubbleLeftRightIcon className="w-6 h-6 text-blue-600 mr-2" />
@@ -306,7 +332,6 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Chat History */}
         <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar">
           {messages.length === 0 && (
             <div className="text-center py-12">
@@ -343,7 +368,6 @@ const App: React.FC = () => {
           <div ref={chatEndRef} />
         </div>
 
-        {/* Input Area */}
         <div className="p-6 border-t border-slate-100">
           <div className="relative flex items-end gap-2">
             <div className="flex-1 relative">
@@ -382,14 +406,11 @@ const App: React.FC = () => {
   );
 };
 
-// Helper Component: Calendar Grid (remains largely same but handles dates better)
 const CalendarGrid: React.FC<{ events: CalendarEvent[]; currentDate: Date }> = ({ events, currentDate }) => {
   const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const hours = Array.from({ length: 24 }, (_, i) => i);
-  
   const startOfWeek = new Date(currentDate);
   startOfWeek.setDate(currentDate.getDate() - currentDate.getDay());
-  
   const weekDates = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(startOfWeek);
     d.setDate(startOfWeek.getDate() + i);
@@ -407,7 +428,6 @@ const CalendarGrid: React.FC<{ events: CalendarEvent[]; currentDate: Date }> = (
           </div>
         ))}
       </div>
-
       <div className="relative grid grid-cols-8">
         <div className="col-span-1 border-r border-slate-100 bg-slate-50/20">
           {hours.map(h => (
@@ -416,21 +436,18 @@ const CalendarGrid: React.FC<{ events: CalendarEvent[]; currentDate: Date }> = (
             </div>
           ))}
         </div>
-
         {weekDates.map((date, dayIdx) => (
           <div key={dayIdx} className="relative col-span-1 border-r last:border-r-0 border-slate-100">
             {hours.map(h => (
               <div key={h} className="h-20 border-b border-slate-100/50 last:border-b-0"></div>
             ))}
-            
             {events.filter(e => new Date(e.start).toDateString() === date.toDateString()).map(event => {
               const start = new Date(event.start);
               const end = new Date(event.end);
               const startHour = start.getHours() + (start.getMinutes() / 60);
               const endHour = end.getHours() + (end.getMinutes() / 60);
               const top = startHour * 80;
-              const height = Math.max((endHour - startHour) * 80, 24); // Minimum height
-
+              const height = Math.max((endHour - startHour) * 80, 24);
               return (
                 <div 
                   key={event.id}
