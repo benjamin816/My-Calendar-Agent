@@ -4,12 +4,11 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { CalendarEvent, CalendarTask, ChatMessage, CalendarViewType } from '../types';
 import { calendarService, setCalendarToken } from '../services/calendar';
-import { ChronosBrain, decodeAudio, playPcmAudio } from '../services/gemini';
-import { format, startOfWeek, endOfWeek, eachDayOfInterval, addDays, isSameDay, startOfDay, parseISO, addHours } from 'date-fns';
+import { ChronosBrain, decodeAudio, playPcmAudio } from '../services/gemini.client';
+import { format, startOfWeek, endOfWeek, eachDayOfInterval, addDays, isSameDay, parseISO } from 'date-fns';
 import { 
   CalendarIcon, 
   ChatBubbleLeftRightIcon, 
-  CheckCircleIcon, 
   MicrophoneIcon, 
   StopIcon, 
   PlusIcon, 
@@ -20,7 +19,6 @@ import {
   BellIcon,
   Cog6ToothIcon,
   Squares2X2Icon,
-  TableCellsIcon,
   ListBulletIcon,
   PaperAirplaneIcon
 } from '@heroicons/react/24/outline';
@@ -90,7 +88,7 @@ export default function ChronosApp() {
 
   const handleSendMessage = async (text?: string, voice: boolean = false) => {
     const msg = text || inputText;
-    if (!msg.trim()) return;
+    if (!msg.trim() || !token) return;
 
     const userMsg: ChatMessage = {
       id: Date.now().toString(),
@@ -104,7 +102,7 @@ export default function ChronosApp() {
     setIsProcessing(true);
 
     try {
-      const responseText = await brainRef.current?.processMessage(msg, refreshData);
+      const responseText = await brainRef.current?.processMessage(msg, refreshData, token);
       if (responseText) {
         const assistantMsg: ChatMessage = {
           id: (Date.now() + 1).toString(),
@@ -121,8 +119,15 @@ export default function ChronosApp() {
           }
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
+      const errorMsg: ChatMessage = {
+        id: Date.now().toString(),
+        role: 'system',
+        content: `Error: ${error.message}`,
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, errorMsg]);
     } finally {
       setIsProcessing(false);
     }
@@ -413,6 +418,8 @@ export default function ChronosApp() {
                 "max-w-[85%] p-4 rounded-3xl text-sm shadow-sm",
                 m.role === 'user' 
                   ? 'bg-blue-600 text-white rounded-tr-none' 
+                  : m.role === 'system'
+                  ? 'bg-red-50 text-red-600 border border-red-100 rounded-tl-none'
                   : 'bg-white border border-slate-100 text-slate-800 rounded-tl-none font-medium'
               )}>
                 {m.content}

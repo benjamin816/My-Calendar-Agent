@@ -10,14 +10,15 @@ export const setCalendarToken = (token: string) => {
   accessToken = token;
 };
 
-async function calendarFetch(path: string, options: RequestInit = {}) {
-  if (!accessToken) throw new Error('Not authenticated with Google');
+async function calendarFetch(path: string, token: string | null, options: RequestInit = {}) {
+  const activeToken = token || accessToken;
+  if (!activeToken) throw new Error('Not authenticated with Google');
   
   const response = await fetch(`${BASE_URL}${path}`, {
     ...options,
     headers: {
       ...options.headers,
-      'Authorization': `Bearer ${accessToken}`,
+      'Authorization': `Bearer ${activeToken}`,
       'Content-Type': 'application/json',
     },
   });
@@ -31,14 +32,15 @@ async function calendarFetch(path: string, options: RequestInit = {}) {
   return response.status === 204 ? null : response.json();
 }
 
-async function tasksFetch(path: string, options: RequestInit = {}) {
-  if (!accessToken) throw new Error('Not authenticated with Google');
+async function tasksFetch(path: string, token: string | null, options: RequestInit = {}) {
+  const activeToken = token || accessToken;
+  if (!activeToken) throw new Error('Not authenticated with Google');
   
   const response = await fetch(`${TASKS_BASE_URL}${path}`, {
     ...options,
     headers: {
       ...options.headers,
-      'Authorization': `Bearer ${accessToken}`,
+      'Authorization': `Bearer ${activeToken}`,
       'Content-Type': 'application/json',
     },
   });
@@ -53,14 +55,14 @@ async function tasksFetch(path: string, options: RequestInit = {}) {
 }
 
 export const calendarService = {
-  getEvents: async (timeMin?: string, timeMax?: string): Promise<CalendarEvent[]> => {
+  getEvents: async (timeMin?: string, timeMax?: string, token: string | null = null): Promise<CalendarEvent[]> => {
     const params = new URLSearchParams({
       timeMin: timeMin || new Date(new Date().setMonth(new Date().getMonth() - 1)).toISOString(),
       timeMax: timeMax || new Date(new Date().setMonth(new Date().getMonth() + 1)).toISOString(),
       singleEvents: 'true',
       orderBy: 'startTime',
     });
-    const data = await calendarFetch(`/calendars/primary/events?${params}`);
+    const data = await calendarFetch(`/calendars/primary/events?${params}`, token);
     return (data.items || []).map((item: any) => ({
       id: item.id,
       summary: item.summary,
@@ -71,14 +73,14 @@ export const calendarService = {
     }));
   },
 
-  createEvent: async (event: Omit<CalendarEvent, 'id'>): Promise<CalendarEvent> => {
+  createEvent: async (event: Omit<CalendarEvent, 'id'>, token: string | null = null): Promise<CalendarEvent> => {
     const body = {
       summary: event.summary,
       description: event.description,
       start: { dateTime: new Date(event.start).toISOString() },
       end: { dateTime: new Date(event.end).toISOString() },
     };
-    const data = await calendarFetch('/calendars/primary/events', {
+    const data = await calendarFetch('/calendars/primary/events', token, {
       method: 'POST',
       body: JSON.stringify(body),
     });
@@ -90,14 +92,14 @@ export const calendarService = {
     };
   },
 
-  updateEvent: async (id: string, updates: Partial<CalendarEvent>): Promise<CalendarEvent> => {
+  updateEvent: async (id: string, updates: Partial<CalendarEvent>, token: string | null = null): Promise<CalendarEvent> => {
     const body: any = {};
     if (updates.summary) body.summary = updates.summary;
     if (updates.description) body.description = updates.description;
     if (updates.start) body.start = { dateTime: new Date(updates.start).toISOString() };
     if (updates.end) body.end = { dateTime: new Date(updates.end).toISOString() };
 
-    const data = await calendarFetch(`/calendars/primary/events/${id}`, {
+    const data = await calendarFetch(`/calendars/primary/events/${id}`, token, {
       method: 'PATCH',
       body: JSON.stringify(body),
     });
@@ -109,17 +111,17 @@ export const calendarService = {
     };
   },
 
-  deleteEvent: async (id: string): Promise<void> => {
-    await calendarFetch(`/calendars/primary/events/${id}`, { method: 'DELETE' });
+  deleteEvent: async (id: string, token: string | null = null): Promise<void> => {
+    await calendarFetch(`/calendars/primary/events/${id}`, token, { method: 'DELETE' });
   },
 
-  getTasks: async (): Promise<CalendarTask[]> => {
+  getTasks: async (token: string | null = null): Promise<CalendarTask[]> => {
     try {
-      const lists = await tasksFetch('/users/@me/lists');
+      const lists = await tasksFetch('/users/@me/lists', token);
       const defaultListId = lists.items?.[0]?.id;
       if (!defaultListId) return [];
 
-      const data = await tasksFetch(`/lists/${defaultListId}/tasks`);
+      const data = await tasksFetch(`/lists/${defaultListId}/tasks`, token);
       return (data.items || []).map((item: any) => ({
         id: item.id,
         title: item.title,
@@ -133,15 +135,15 @@ export const calendarService = {
     }
   },
 
-  createTask: async (task: Omit<CalendarTask, 'id'>): Promise<CalendarTask> => {
-    const lists = await tasksFetch('/users/@me/lists');
+  createTask: async (task: Omit<CalendarTask, 'id'>, token: string | null = null): Promise<CalendarTask> => {
+    const lists = await tasksFetch('/users/@me/lists', token);
     const defaultListId = lists.items?.[0]?.id;
     const body = {
       title: task.title,
       due: task.due ? new Date(task.due).toISOString() : undefined,
       notes: task.notes,
     };
-    const data = await tasksFetch(`/lists/${defaultListId}/tasks`, {
+    const data = await tasksFetch(`/lists/${defaultListId}/tasks`, token, {
       method: 'POST',
       body: JSON.stringify(body),
     });
@@ -153,14 +155,14 @@ export const calendarService = {
     };
   },
 
-  updateTask: async (id: string, updates: Partial<CalendarTask>): Promise<CalendarTask> => {
-    const lists = await tasksFetch('/users/@me/lists');
+  updateTask: async (id: string, updates: Partial<CalendarTask>, token: string | null = null): Promise<CalendarTask> => {
+    const lists = await tasksFetch('/users/@me/lists', token);
     const defaultListId = lists.items?.[0]?.id;
     const body: any = {};
     if (updates.title) body.title = updates.title;
     if (updates.completed !== undefined) body.status = updates.completed ? 'completed' : 'needsAction';
 
-    const data = await tasksFetch(`/lists/${defaultListId}/tasks/${id}`, {
+    const data = await tasksFetch(`/lists/${defaultListId}/tasks/${id}`, token, {
       method: 'PATCH',
       body: JSON.stringify(body),
     });
