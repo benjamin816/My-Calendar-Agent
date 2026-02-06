@@ -130,9 +130,17 @@ export default function ChronosApp() {
   };
 
   const handleDurationSelection = (mins: number, pending: any) => {
-    const end = addMinutes(new Date(pending.args.start), mins).toISOString();
-    const newMsg = `Finalize event "${pending.args.summary}" with duration of ${mins} minutes (ending at ${end})`;
+    const start = new Date(pending.args.start);
+    const end = addMinutes(start, mins).toISOString();
+    // We pass a very explicit final command to the model to avoid offset errors
+    const newMsg = `Proceed with creating "${pending.args.summary}" starting at ${pending.args.start} and ending at ${end} (Duration: ${mins} minutes).`;
     handleSendMessage(newMsg);
+  };
+
+  const handleConfirmedAction = (pending: any) => {
+    // Stringify the original request to remind the model exactly what was confirmed
+    const confirmationText = `Executing ${pending.action}: ${JSON.stringify(pending.args)}`;
+    handleSendMessage(confirmationText, false, true);
   };
 
   const toggleListening = () => {
@@ -309,10 +317,6 @@ export default function ChronosApp() {
                         <button key={mins} onClick={() => handleDurationSelection(mins, m.ui?.pending)} className="py-2 text-xs font-bold border border-slate-100 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition-all">{mins}m</button>
                       ))}
                     </div>
-                    <div className="flex gap-2">
-                      <input type="number" value={customDuration} onChange={e => setCustomDuration(e.target.value)} placeholder="Custom min" className="flex-1 text-xs border border-slate-100 rounded-lg px-2 py-2" />
-                      <button onClick={() => handleDurationSelection(parseInt(customDuration), m.ui?.pending)} className="bg-blue-600 text-white px-3 rounded-lg"><CheckIcon className="w-4 h-4"/></button>
-                    </div>
                   </div>
                 )}
                 {m.ui?.type === 'confirm' && (
@@ -322,7 +326,7 @@ export default function ChronosApp() {
                       <p className={cn("text-xs font-bold", m.ui.action === 'delete_event' ? 'text-red-700' : 'text-amber-700')}>{m.ui.message}</p>
                     </div>
                     <div className="flex gap-2">
-                      <button onClick={() => handleSendMessage(m.ui?.pending.args.summary || "Proceed with action", false, true)} className={cn("flex-1 py-2 rounded-lg text-xs font-bold text-white transition-all shadow-sm active:scale-95", m.ui.action === 'delete_event' ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700')}>Confirm</button>
+                      <button onClick={() => handleConfirmedAction(m.ui?.pending)} className={cn("flex-1 py-2 rounded-lg text-xs font-bold text-white transition-all shadow-sm active:scale-95", m.ui.action === 'delete_event' ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700')}>Confirm</button>
                       <button onClick={() => setMessages(prev => prev.filter(msg => msg.id !== m.id))} className="flex-1 bg-slate-100 text-slate-600 py-2 rounded-lg text-xs font-bold hover:bg-slate-200">Cancel</button>
                     </div>
                   </div>

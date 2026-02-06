@@ -12,14 +12,27 @@ export const setCalendarToken = (token: string) => {
 };
 
 /**
- * Normalizes a date string or object to a local New York time string (RFC3339 without offset)
- * used in conjunction with the timeZone parameter in Google Calendar API.
+ * Normalizes any date input to a New York local ISO string (YYYY-MM-DDTHH:mm:ss).
+ * This "floating" time is sent to Google with the New York timezone ID.
  */
 function formatNY(date: Date | string): string {
-  const d = new Date(date);
-  // sv-SE locale provides "YYYY-MM-DD HH:mm:ss"
-  const localString = d.toLocaleString('sv-SE', { timeZone: TIMEZONE });
-  return localString.replace(' ', 'T');
+  // Use Intl to format exactly into the parts we need for NY
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+
+  const parts = formatter.formatToParts(new Date(date));
+  const getPart = (type: string) => parts.find(p => p.type === type)?.value;
+
+  // Construct YYYY-MM-DDTHH:mm:ss
+  return `${getPart('year')}-${getPart('month')}-${getPart('day')}T${getPart('hour')}:${getPart('minute')}:${getPart('second')}`;
 }
 
 async function calendarFetch(path: string, token: string | null, options: RequestInit = {}) {
@@ -69,7 +82,7 @@ async function tasksFetch(path: string, token: string | null, options: RequestIn
 export const calendarService = {
   getEvents: async (timeMin?: string, timeMax?: string, token: string | null = null): Promise<CalendarEvent[]> => {
     const params = new URLSearchParams({
-      timeMin: timeMin || new Date(new Date().setMonth(new Date().getMonth() - 2)).toISOString(),
+      timeMin: timeMin || new Date(new Date().setMonth(new Date().getMonth() - 1)).toISOString(),
       timeMax: timeMax || new Date(new Date().setMonth(new Date().getMonth() + 2)).toISOString(),
       singleEvents: 'true',
       orderBy: 'startTime',
@@ -153,11 +166,10 @@ export const calendarService = {
     const lists = await tasksFetch('/users/@me/lists', token);
     const defaultListId = lists.items?.[0]?.id;
     
-    // Tasks are date-only usually, so we set to NY midnight or end of day
-    const d = new Date(task.dueDate);
+    // For tasks, we use the simple date string provided
     const body = {
       title: task.title,
-      due: d.toISOString(), // Tasks API handles UTC dates fine for due dates
+      due: new Date(task.dueDate).toISOString(),
       notes: task.notes,
     };
     const data = await tasksFetch(`/lists/${defaultListId}/tasks`, token, {

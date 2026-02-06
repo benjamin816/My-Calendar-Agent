@@ -5,12 +5,12 @@ import { calendarService } from "./calendar";
 const calendarTools: FunctionDeclaration[] = [
   {
     name: "list_events",
-    description: "Search/list events for a specific time range. Use this to find IDs before updating or deleting.",
+    description: "Search/list calendar events. CRITICAL: Use this to find the correct 'id' before attempting to update or delete an event.",
     parameters: {
       type: Type.OBJECT,
       properties: {
-        timeMin: { type: Type.STRING, description: "ISO date string for start of range" },
-        timeMax: { type: Type.STRING, description: "ISO date string for end of range" }
+        timeMin: { type: Type.STRING, description: "ISO string (EST)" },
+        timeMax: { type: Type.STRING, description: "ISO string (EST)" }
       }
     }
   },
@@ -20,179 +20,164 @@ const calendarTools: FunctionDeclaration[] = [
     parameters: {
       type: Type.OBJECT,
       properties: {
-        summary: { type: Type.STRING, description: "The title of the event" },
-        start: { type: Type.STRING, description: "ISO date string for start time" },
-        end: { type: Type.STRING, description: "ISO date string for end time." },
-        description: { type: Type.STRING, description: "Details about the event" }
+        summary: { type: Type.STRING, description: "Event title" },
+        start: { type: Type.STRING, description: "Start time (EST ISO string)" },
+        end: { type: Type.STRING, description: "End time (EST ISO string)" },
+        description: { type: Type.STRING }
       },
       required: ["summary", "start"]
     }
   },
   {
     name: "update_event",
-    description: "Update an existing calendar event (reschedule, rename, or change details).",
+    description: "Modify an existing event. REQUIRES an 'id'. Search first if unknown.",
     parameters: {
       type: Type.OBJECT,
       properties: {
-        id: { type: Type.STRING, description: "Unique ID of the event to update (Mandatory)" },
-        summary: { type: Type.STRING, description: "New title" },
-        start: { type: Type.STRING, description: "New start time" },
-        end: { type: Type.STRING, description: "New end time" },
-        description: { type: Type.STRING, description: "New description" }
+        id: { type: Type.STRING, description: "ID from list_events" },
+        summary: { type: Type.STRING },
+        start: { type: Type.STRING },
+        end: { type: Type.STRING },
+        description: { type: Type.STRING }
       },
       required: ["id"]
     }
   },
   {
     name: "delete_event",
-    description: "Permanently remove an event from the calendar.",
+    description: "Remove an event. REQUIRES an 'id'. Search first if unknown.",
     parameters: {
       type: Type.OBJECT,
       properties: {
-        id: { type: Type.STRING, description: "Unique ID of the event to remove (Mandatory)" }
+        id: { type: Type.STRING, description: "ID from list_events" }
       },
       required: ["id"]
     }
   },
   {
     name: "list_tasks",
-    description: "Get the current list of tasks."
+    description: "Get user tasks."
   },
   {
     name: "create_task",
-    description: "Add a new task. Requires a date.",
+    description: "Add a task with a specific date.",
     parameters: {
       type: Type.OBJECT,
       properties: {
-        title: { type: Type.STRING, description: "Title of the task" },
-        dueDate: { type: Type.STRING, description: "Due date (YYYY-MM-DD)" }
+        title: { type: Type.STRING },
+        dueDate: { type: Type.STRING, description: "YYYY-MM-DD" }
       },
       required: ["title", "dueDate"]
-    }
-  },
-  {
-    name: "mark_task_completed",
-    description: "Complete or uncomplete a task.",
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        id: { type: Type.STRING },
-        completed: { type: Type.BOOLEAN }
-      },
-      required: ["id", "completed"]
     }
   }
 ];
 
 export async function processChatAction(message: string, history: any[], accessToken: string, confirmed: boolean = false) {
   const apiKey = process.env.API_KEY;
-  if (!apiKey) throw new Error("Missing API_KEY environment variable");
+  if (!apiKey) throw new Error("Missing API_KEY");
 
   const ai = new GoogleGenAI({ apiKey });
+  
+  // Create system instruction with current context
+  const systemInstruction = `You are Chronos, a calendar agent.
+  CRITICAL: 
+  1. ALL TIMES ARE America/New_York (EST/EDT). NEVER use UTC.
+  2. Current Context Time: ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })}.
+  3. When a user asks to "remove", "reschedule", or "change" an event, you MUST call 'list_events' first to find the 'id' and current details.
+  4. Once you have the 'id', call the appropriate 'update_event' or 'delete_event' tool.
+  5. If the user confirms an action, proceed immediately with the tool call.
+  6. Always respond in Markdown.`;
+
   const chat = ai.chats.create({
     model: "gemini-3-flash-preview",
     config: {
-      systemInstruction: `You are Chronos, a calendar agent.
-      Timezone: America/New_York (All user times are in this timezone).
-      Current Time: ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })}.
-      
-      BEHAVIOR RULES:
-      1. RESCHEDULING/ALTERING: Always search for events first using 'list_events' to find the correct 'id'. Then use 'update_event'.
-      2. DELETING: Always search for the event first to get the 'id'. Use 'delete_event' for removals.
-      3. DURATION: If a user creates an event without an end time, the system will prompt them via UI.
-      4. CONFIRMATION: The system intercepts updates and deletions for confirmation. 
-      5. FORMAT: Use Markdown for all text responses. Mention events clearly.`,
+      systemInstruction,
       tools: [{ functionDeclarations: calendarTools }]
     },
     history: history
   });
 
-  let response = await chat.sendMessage({ message });
+  // If user is confirming, we force the context to "The user confirmed, proceed with [Original Action]"
+  const prompt = confirmed ? `User has confirmed the following action. Proceed with the tool call now: ${message}` : message;
   
+  let response = await chat.sendMessage({ message: prompt });
+  
+  // Handle Tool Calls
   if (response.functionCalls && response.functionCalls.length > 0) {
     const firstCall = response.functionCalls[0];
 
-    // Intercept Create Event for Duration
-    if (firstCall.name === "create_event" && !confirmed) {
-      const args = firstCall.args as any;
-      if (!args.end || args.end === args.start) {
+    // Check for UI Interceptions (Duration / Confirmation)
+    if (!confirmed) {
+      if (firstCall.name === "create_event") {
+        const args = firstCall.args as any;
+        if (!args.end || args.end === args.start) {
+          return {
+            text: "How long should this event be?",
+            ui: { type: 'duration', options: [15, 30, 45, 60, 90, 120], pending: { action: 'create_event', args: args } }
+          };
+        }
+      }
+
+      if (firstCall.name === "update_event") {
         return {
-          text: "I need an end time for that event. How long should it be?",
-          ui: {
-            type: 'duration',
-            options: [15, 30, 45, 60, 90, 120],
-            pending: { action: 'create_event', args: args }
+          text: "I found the event. Ready to apply the changes?",
+          ui: { 
+            type: 'confirm', 
+            action: 'update_event', 
+            pending: { action: 'update_event', args: firstCall.args },
+            message: `Apply changes to "${(firstCall.args as any).summary || 'event'}"?`
+          }
+        };
+      }
+
+      if (firstCall.name === "delete_event") {
+        return {
+          text: "Are you sure you want to remove this?",
+          ui: { 
+            type: 'confirm', 
+            action: 'delete_event', 
+            pending: { action: 'delete_event', args: firstCall.args },
+            message: "Permanently delete this event?"
           }
         };
       }
     }
 
-    // Intercept Update for Confirmation
-    if (firstCall.name === "update_event" && !confirmed) {
-      const args = firstCall.args as any;
-      return {
-        text: `I've found the event. Ready to apply those changes?`,
-        ui: {
-          type: 'confirm',
-          action: 'update_event',
-          pending: { action: 'update_event', args: args },
-          message: `Update event ${args.summary ? `to "${args.summary}"` : ''} ${args.start ? `at ${new Date(args.start).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}` : ''}?`
-        }
-      };
-    }
-
-    // Intercept Delete for Confirmation
-    if (firstCall.name === "delete_event" && !confirmed) {
-      const args = firstCall.args as any;
-      return {
-        text: "Are you sure you want to remove this event?",
-        ui: {
-          type: 'confirm',
-          action: 'delete_event',
-          pending: { action: 'delete_event', args: args },
-          message: `Permanently delete the selected event?`
-        }
-      };
-    }
-
     // Execute Tools
     const functionResponseParts: Part[] = [];
     for (const call of response.functionCalls) {
-      let apiResult: any;
+      let result: any;
       try {
         switch (call.name) {
           case "list_events":
-            apiResult = await calendarService.getEvents(call.args.timeMin as string, call.args.timeMax as string, accessToken);
+            result = await calendarService.getEvents(call.args.timeMin as string, call.args.timeMax as string, accessToken);
             break;
           case "create_event":
-            apiResult = await calendarService.createEvent(call.args as any, accessToken);
+            result = await calendarService.createEvent(call.args as any, accessToken);
             break;
           case "update_event":
-            apiResult = await calendarService.updateEvent(call.args.id as string, call.args as any, accessToken);
+            result = await calendarService.updateEvent(call.args.id as string, call.args as any, accessToken);
             break;
           case "delete_event":
             await calendarService.deleteEvent(call.args.id as string, accessToken);
-            apiResult = { status: "deleted successfully" };
+            result = { status: "success", message: "Event removed" };
             break;
           case "list_tasks":
-            apiResult = await calendarService.getTasks(accessToken);
+            result = await calendarService.getTasks(accessToken);
             break;
           case "create_task":
-            apiResult = await calendarService.createTask(call.args as any, accessToken);
-            break;
-          case "mark_task_completed":
-            apiResult = await calendarService.updateTask(call.args.id as string, { completed: call.args.completed as boolean }, accessToken);
+            result = await calendarService.createTask(call.args as any, accessToken);
             break;
         }
       } catch (e: any) {
-        apiResult = { error: e.message };
+        result = { error: e.message };
       }
-      functionResponseParts.push({
-        functionResponse: { name: call.name, response: { result: apiResult } }
-      });
+      functionResponseParts.push({ functionResponse: { name: call.name, response: { result } } });
     }
 
-    response = await chat.sendMessage({ message: functionResponseParts });
+    // Get final text confirmation from model
+    const finalResponse = await chat.sendMessage({ message: functionResponseParts });
+    return { text: finalResponse.text };
   }
 
   return { text: response.text };
@@ -200,7 +185,7 @@ export async function processChatAction(message: string, history: any[], accessT
 
 export async function processTTSAction(text: string) {
   const apiKey = process.env.API_KEY;
-  if (!apiKey) throw new Error("Missing API_KEY environment variable");
+  if (!apiKey) throw new Error("Missing API_KEY");
   const ai = new GoogleGenAI({ apiKey });
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash-preview-tts",
