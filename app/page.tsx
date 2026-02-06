@@ -6,7 +6,7 @@ import { useSession, signIn, signOut } from "next-auth/react";
 import { CalendarEvent, CalendarTask, ChatMessage } from '../types';
 import { calendarService, setCalendarToken } from '../services/calendar';
 import { ChronosBrain, decodeAudio, playPcmAudio } from '../services/gemini.client';
-import { format, startOfWeek, endOfWeek, eachDayOfInterval, addDays, isSameDay, parseISO, addMinutes } from 'date-fns';
+import { format, eachDayOfInterval, addDays, isSameDay, parseISO, addMinutes, startOfDay, endOfDay, isWithinInterval } from 'date-fns';
 import { 
   ChatBubbleLeftRightIcon, 
   MicrophoneIcon, 
@@ -65,8 +65,11 @@ export default function ChronosApp() {
     if (!session?.accessToken) return;
     try {
       setCalendarToken(session.accessToken as string);
+      // Fetch a bit more range than just 3 days to ensure multi-day events spanning into current window are caught
+      const timeMin = startOfDay(addDays(currentDate, -7)).toISOString();
+      const timeMax = endOfDay(addDays(currentDate, 14)).toISOString();
       const [evs, tks] = await Promise.all([
-        calendarService.getEvents(undefined, undefined, session.accessToken as string),
+        calendarService.getEvents(timeMin, timeMax, session.accessToken as string),
         calendarService.getTasks(session.accessToken as string)
       ]);
       setEvents(evs);
@@ -75,7 +78,7 @@ export default function ChronosApp() {
       console.error("Data refresh failed:", e);
       if (e.message === 'AUTH_EXPIRED') signIn('google');
     }
-  }, [session]);
+  }, [session, currentDate]);
 
   useEffect(() => {
     if (status === 'authenticated') refreshData();
@@ -160,14 +163,24 @@ export default function ChronosApp() {
     else { recognitionRef.current?.start(); setIsListening(true); }
   };
 
-  const weekDays = useMemo(() => {
-    const start = startOfWeek(currentDate);
-    const end = endOfWeek(currentDate);
+  const displayDays = useMemo(() => {
+    const start = startOfDay(currentDate);
+    const end = endOfDay(addDays(start, 2));
     return eachDayOfInterval({ start, end });
   }, [currentDate]);
 
   const getEventsForDay = (day: Date) => {
-    return events.filter(e => isSameDay(parseISO(e.start), day)).sort((a, b) => parseISO(a.start).getTime() - parseISO(b.start).getTime());
+    const dayStart = startOfDay(day);
+    const dayEnd = endOfDay(day);
+    
+    return events.filter(e => {
+      const eStart = parseISO(e.start);
+      const eEnd = parseISO(e.end);
+      
+      // Check if event overlaps with the given day
+      // Overlap condition: (Event Start <= Day End) AND (Event End >= Day Start)
+      return eStart <= dayEnd && eEnd >= dayStart;
+    }).sort((a, b) => parseISO(a.start).getTime() - parseISO(b.start).getTime());
   };
 
   const toggleTask = async (task: CalendarTask) => {
@@ -238,9 +251,9 @@ export default function ChronosApp() {
         <header className="h-20 flex items-center justify-between px-8 bg-white border-b border-slate-200">
           <div className="flex items-center gap-6">
              <div className="flex items-center gap-2">
-                <button onClick={() => setCurrentDate(addDays(currentDate, -7))} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 transition-colors"><ChevronLeftIcon className="w-5 h-5"/></button>
+                <button onClick={() => setCurrentDate(prev => addDays(prev, -3))} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 transition-colors"><ChevronLeftIcon className="w-5 h-5"/></button>
                 <button onClick={() => setCurrentDate(new Date())} className="px-4 py-1.5 text-xs font-bold bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-colors">Today</button>
-                <button onClick={() => setCurrentDate(addDays(currentDate, 7))} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 transition-colors"><ChevronRightIcon className="w-5 h-5"/></button>
+                <button onClick={() => setCurrentDate(prev => addDays(prev, 3))} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 transition-colors"><ChevronRightIcon className="w-5 h-5"/></button>
              </div>
              <h2 className="text-2xl font-black tracking-tight text-slate-900">{format(currentDate, 'MMMM yyyy')}</h2>
           </div>
@@ -252,33 +265,49 @@ export default function ChronosApp() {
         <main className="flex-1 overflow-hidden flex flex-col p-6 space-y-6">
           {activeTab === 'calendar' && (
             <div className="flex-1 bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-              <div className="grid grid-cols-7 border-b border-slate-100 bg-slate-50/30">
-                {weekDays.map(day => (
+              <div className="grid grid-cols-3 border-b border-slate-100 bg-slate-50/30">
+                {displayDays.map(day => (
                   <div key={day.toISOString()} className="flex flex-col items-center justify-center py-4 border-l first:border-l-0 border-slate-100">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{format(day, 'EEE')}</span>
-                    <span className={cn("text-lg font-black mt-1 h-9 w-9 flex items-center justify-center rounded-xl transition-all", isSameDay(day, new Date()) ? "bg-blue-600 text-white shadow-lg shadow-blue-200" : "text-slate-800")}>{format(day, 'd')}</span>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{format(day, 'EEEE')}</span>
+                    <div className="flex items-center gap-3 mt-1">
+                      <span className={cn("text-lg font-black h-10 w-10 flex items-center justify-center rounded-xl transition-all", isSameDay(day, new Date()) ? "bg-blue-600 text-white shadow-lg shadow-blue-200" : "text-slate-800")}>{format(day, 'd')}</span>
+                      {isSameDay(day, new Date()) && <span className="text-[10px] font-black uppercase text-blue-600 tracking-tighter bg-blue-50 px-2 py-0.5 rounded-full">Today</span>}
+                    </div>
                   </div>
                 ))}
               </div>
-              <div className="flex-1 grid grid-cols-7 overflow-hidden">
-                {weekDays.map(day => {
+              <div className="flex-1 grid grid-cols-3 overflow-hidden">
+                {displayDays.map(day => {
                   const dayEvents = getEventsForDay(day);
                   return (
-                    <div key={day.toISOString()} className="border-l first:border-l-0 border-slate-100 p-3 space-y-3 overflow-y-auto custom-scrollbar hover:bg-slate-50/50 transition-colors">
-                      {dayEvents.map(e => (
-                        <div key={e.id} onClick={() => handleSendMessage(`Tell me about ${e.summary}`)} className="bg-white border border-slate-200 p-3 rounded-2xl shadow-sm hover:shadow-md transition-all cursor-pointer group hover:border-blue-400">
-                          <p className="text-xs font-bold text-slate-900 group-hover:text-blue-600 truncate">{e.summary}</p>
-                          <div className="flex items-center gap-1.5 mt-2">
-                            <ClockIcon className="w-3 h-3 text-slate-400" />
-                            <p className="text-[10px] text-slate-500 font-semibold uppercase">
-                              {e.isAllDay ? 'All Day' : format(parseISO(e.start), 'h:mm a')}
-                            </p>
+                    <div key={day.toISOString()} className="border-l first:border-l-0 border-slate-100 p-4 space-y-4 overflow-y-auto custom-scrollbar hover:bg-slate-50/50 transition-colors">
+                      {dayEvents.map(e => {
+                        const isMultiDay = !isSameDay(parseISO(e.start), parseISO(e.end));
+                        return (
+                          <div key={e.id} onClick={() => handleSendMessage(`Tell me about ${e.summary}`)} className={cn(
+                            "bg-white border p-3.5 rounded-2xl shadow-sm hover:shadow-md transition-all cursor-pointer group hover:border-blue-400 relative overflow-hidden",
+                            isMultiDay ? "border-l-4 border-l-blue-500" : "border-slate-200"
+                          )}>
+                            {isMultiDay && <div className="absolute top-0 right-0 p-1.5"><SparklesIcon className="w-3 h-3 text-blue-300"/></div>}
+                            <p className="text-sm font-bold text-slate-900 group-hover:text-blue-600 transition-colors leading-snug">{e.summary}</p>
+                            <div className="flex items-center gap-1.5 mt-2.5">
+                              <ClockIcon className="w-3.5 h-3.5 text-slate-400" />
+                              <p className="text-[11px] text-slate-500 font-bold uppercase tracking-tight">
+                                {e.isAllDay ? 'All Day' : `${format(parseISO(e.start), 'h:mm a')} - ${format(parseISO(e.end), 'h:mm a')}`}
+                              </p>
+                            </div>
+                            {isMultiDay && (
+                              <p className="text-[9px] text-slate-400 font-bold mt-1.5 uppercase">
+                                {format(parseISO(e.start), 'MMM d')} → {format(parseISO(e.end), 'MMM d')}
+                              </p>
+                            )}
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                       {dayEvents.length === 0 && (
                         <div className="h-full flex flex-col items-center justify-center opacity-10">
-                          <CalendarDaysIcon className="w-6 h-6 text-slate-300" />
+                          <CalendarDaysIcon className="w-10 h-10 text-slate-300" />
+                          <p className="text-[10px] font-bold mt-2 uppercase tracking-widest">Clear Schedule</p>
                         </div>
                       )}
                     </div>
