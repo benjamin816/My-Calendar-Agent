@@ -1,4 +1,3 @@
-
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
@@ -91,6 +90,8 @@ export default function ChronosApp() {
     const msg = text || inputText;
     if (!msg.trim() && !confirmed) return;
 
+    let currentHistory = [...messages];
+
     if (!confirmed) {
       const userMsg: ChatMessage = {
         id: Date.now().toString(),
@@ -99,13 +100,22 @@ export default function ChronosApp() {
         timestamp: new Date()
       };
       setMessages(prev => [...prev, userMsg]);
+      currentHistory.push(userMsg);
     }
 
     setInputText('');
     setIsProcessing(true);
 
     try {
-      const result = await brainRef.current?.processMessage(msg, refreshData, session?.accessToken as string, confirmed);
+      // Send history so Chronos has memory of previous commands
+      const result = await brainRef.current?.processMessage(
+        msg, 
+        refreshData, 
+        session?.accessToken as string, 
+        currentHistory,
+        confirmed
+      );
+      
       if (result) {
         const assistantMsg: ChatMessage = {
           id: (Date.now() + 1).toString(),
@@ -336,13 +346,13 @@ export default function ChronosApp() {
                   </div>
                 )}
                 {m.ui?.type === 'confirm' && (
-                  <div className={cn("mt-4 p-4 rounded-xl border shadow-sm space-y-3", m.ui.action === 'delete_event' ? 'bg-red-50 border-red-100' : 'bg-white border-amber-100')}>
+                  <div className={cn("mt-4 p-4 rounded-xl border shadow-sm space-y-3", m.ui.action === 'delete_event' || m.ui.action === 'delete_task' ? 'bg-red-50 border-red-100' : 'bg-white border-amber-100')}>
                     <div className="flex items-center gap-2">
-                      {m.ui.action === 'delete_event' ? <TrashIcon className="w-4 h-4 text-red-600" /> : <ClockIcon className="w-4 h-4 text-amber-600" />}
-                      <p className={cn("text-xs font-bold", m.ui.action === 'delete_event' ? 'text-red-700' : 'text-amber-700')}>{m.ui.message}</p>
+                      {m.ui.action === 'delete_event' || m.ui.action === 'delete_task' ? <TrashIcon className="w-4 h-4 text-red-600" /> : <ClockIcon className="w-4 h-4 text-amber-600" />}
+                      <p className={cn("text-xs font-bold", m.ui.action === 'delete_event' || m.ui.action === 'delete_task' ? 'text-red-700' : 'text-amber-700')}>{m.ui.message}</p>
                     </div>
                     <div className="flex gap-2">
-                      <button onClick={() => handleConfirmedAction(m.ui?.pending)} className={cn("flex-1 py-2 rounded-lg text-xs font-bold text-white transition-all shadow-sm active:scale-95", m.ui.action === 'delete_event' ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700')}>Confirm</button>
+                      <button onClick={() => handleConfirmedAction(m.ui?.pending)} className={cn("flex-1 py-2 rounded-lg text-xs font-bold text-white transition-all shadow-sm active:scale-95", m.ui.action === 'delete_event' || m.ui.action === 'delete_task' ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700')}>Confirm</button>
                       <button onClick={() => setMessages(prev => prev.filter(msg => msg.id !== m.id))} className="flex-1 bg-slate-100 text-slate-600 py-2 rounded-lg text-xs font-bold hover:bg-slate-200">Cancel</button>
                     </div>
                   </div>

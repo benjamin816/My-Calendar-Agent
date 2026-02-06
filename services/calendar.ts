@@ -1,4 +1,3 @@
-
 import { CalendarEvent, CalendarTask } from '../types';
 
 const BASE_URL = 'https://www.googleapis.com/calendar/v3';
@@ -11,25 +10,15 @@ export const setCalendarToken = (token: string) => {
   accessToken = token;
 };
 
-/**
- * Normalizes input to a floating NY local ISO string (YYYY-MM-DDTHH:mm:ss).
- * If input is a string with timezone info (Z or offset), it STRIPS it to preserve
- * the literal time intended by the user/model for the target timezone.
- */
 function normalizeNYDateTime(input: string | Date): string {
   if (typeof input === 'string') {
-    // If it's a full ISO string (e.g. 2024-10-25T18:00:00.000Z), 
-    // we take the first 19 chars to treat it as a floating local time.
-    const match = input.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})/);
+    const stripped = input.replace(/(Z|[+-]\d{2}:\d{2})$/, '');
+    const match = stripped.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})/);
     if (match) return match[1];
-    
-    // If it's just a date (YYYY-MM-DD), add time
-    if (/^\d{4}-\d{2}-\d{2}$/.test(input)) return `${input}T00:00:00`;
-    
-    return input;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(stripped)) return `${stripped}T00:00:00`;
+    return stripped;
   }
 
-  // If input is a Date object (like 'now'), format specifically for NY
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone: TIMEZONE,
     year: 'numeric',
@@ -42,9 +31,8 @@ function normalizeNYDateTime(input: string | Date): string {
   });
 
   const parts = formatter.formatToParts(input);
-  const getPart = (type: string) => parts.find(p => p.type === type)?.value;
-
-  return `${getPart('year')}-${getPart('month')}-${getPart('day')}T${getPart('hour')}:${getPart('minute')}:${getPart('second')}`;
+  const p = (type: string) => parts.find(p => p.type === type)?.value;
+  return `${p('year')}-${p('month')}-${p('day')}T${p('hour')}:${p('minute')}:${p('second')}`;
 }
 
 async function calendarFetch(path: string, token: string | null, options: RequestInit = {}) {
@@ -65,7 +53,6 @@ async function calendarFetch(path: string, token: string | null, options: Reques
     const errorData = await response.json();
     throw new Error(errorData.error?.message || 'API request failed');
   }
-  
   return response.status === 204 ? null : response.json();
 }
 
@@ -87,7 +74,6 @@ async function tasksFetch(path: string, token: string | null, options: RequestIn
     const errorData = await response.json();
     throw new Error(errorData.error?.message || 'API request failed');
   }
-  
   return response.status === 204 ? null : response.json();
 }
 
@@ -117,7 +103,7 @@ export const calendarService = {
       summary: event.summary,
       description: event.description,
       start: { dateTime: normalizeNYDateTime(event.start), timeZone: TIMEZONE },
-      end: { dateTime: normalizeNYDateTime(event.end), timeZone: TIMEZONE },
+      end: { dateTime: normalizeNYDateTime(event.end || event.start), timeZone: TIMEZONE },
     };
     const data = await calendarFetch('/calendars/primary/events', token, {
       method: 'POST',
@@ -150,17 +136,14 @@ export const calendarService = {
     };
   },
 
-  deleteEvent: async (id: string, token: string | null = null): Promise<void> => {
+  deleteEvent: async (id: string, token: string | null = null): Promise<any> => {
     await calendarFetch(`/calendars/primary/events/${id}`, token, { method: 'DELETE' });
+    return { ok: true, id, status: 'deleted' };
   },
 
   getTasks: async (token: string | null = null): Promise<CalendarTask[]> => {
     try {
-      const lists = await tasksFetch('/users/@me/lists', token);
-      const defaultListId = lists.items?.[0]?.id;
-      if (!defaultListId) return [];
-
-      const data = await tasksFetch(`/lists/${defaultListId}/tasks`, token);
+      const data = await tasksFetch(`/lists/@default/tasks`, token);
       return (data.items || []).map((item: any) => ({
         id: item.id,
         title: item.title,
@@ -174,16 +157,13 @@ export const calendarService = {
     }
   },
 
-  createTask: async (task: { title: string; dueDate: string; notes?: string }, token: string | null = null): Promise<CalendarTask> => {
-    const lists = await tasksFetch('/users/@me/lists', token);
-    const defaultListId = lists.items?.[0]?.id;
-    
+  createTask: async (task: { title: string; dueDate?: string; notes?: string }, token: string | null = null): Promise<CalendarTask> => {
     const body = {
       title: task.title,
-      due: new Date(task.dueDate).toISOString(),
+      due: task.dueDate ? new Date(task.dueDate).toISOString() : undefined,
       notes: task.notes,
     };
-    const data = await tasksFetch(`/lists/${defaultListId}/tasks`, token, {
+    const data = await tasksFetch(`/lists/@default/tasks`, token, {
       method: 'POST',
       body: JSON.stringify(body),
     });
@@ -196,13 +176,13 @@ export const calendarService = {
   },
 
   updateTask: async (id: string, updates: Partial<CalendarTask>, token: string | null = null): Promise<CalendarTask> => {
-    const lists = await tasksFetch('/users/@me/lists', token);
-    const defaultListId = lists.items?.[0]?.id;
     const body: any = {};
     if (updates.title) body.title = updates.title;
+    if (updates.notes) body.notes = updates.notes;
     if (updates.completed !== undefined) body.status = updates.completed ? 'completed' : 'needsAction';
+    if (updates.due) body.due = new Date(updates.due).toISOString();
 
-    const data = await tasksFetch(`/lists/${defaultListId}/tasks/${id}`, token, {
+    const data = await tasksFetch(`/lists/@default/tasks/${id}`, token, {
       method: 'PATCH',
       body: JSON.stringify(body),
     });
@@ -212,5 +192,10 @@ export const calendarService = {
       due: data.due,
       completed: data.status === 'completed',
     };
+  },
+
+  deleteTask: async (id: string, token: string | null = null): Promise<any> => {
+    await tasksFetch(`/lists/@default/tasks/${id}`, token, { method: 'DELETE' });
+    return { ok: true, id, status: 'deleted' };
   }
 };

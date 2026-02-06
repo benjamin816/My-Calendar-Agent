@@ -1,12 +1,11 @@
-
 export class ChronosBrain {
-  async processMessage(message: string, onUpdate: () => void, accessToken: string, confirmed: boolean = false) {
+  async processMessage(message: string, onUpdate: () => void, accessToken: string, history: any[] = [], confirmed: boolean = false) {
     const response = await fetch('/api/gemini', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         action: 'chat',
-        payload: { message, accessToken, confirmed }
+        payload: { message, accessToken, confirmed, history }
       })
     });
 
@@ -17,7 +16,7 @@ export class ChronosBrain {
 
     const data = await response.json();
     onUpdate(); 
-    return data; // Returns { text, ui? }
+    return data;
   }
 
   async generateSpeech(text: string): Promise<string | null> {
