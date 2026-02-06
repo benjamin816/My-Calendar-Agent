@@ -1,30 +1,28 @@
+
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSession, signIn, signOut } from "next-auth/react";
-import { CalendarEvent, CalendarTask, ChatMessage, CalendarViewType } from '../types';
+import { CalendarEvent, CalendarTask, ChatMessage } from '../types';
 import { calendarService, setCalendarToken } from '../services/calendar';
 import { ChronosBrain, decodeAudio, playPcmAudio } from '../services/gemini.client';
 import { format, startOfWeek, endOfWeek, eachDayOfInterval, addDays, isSameDay, parseISO, addMinutes } from 'date-fns';
 import { 
-  CalendarIcon, 
   ChatBubbleLeftRightIcon, 
   MicrophoneIcon, 
   StopIcon, 
-  PlusIcon, 
   ChevronLeftIcon, 
   ChevronRightIcon,
   ArrowPathIcon,
   CheckIcon,
-  BellIcon,
   Cog6ToothIcon,
   Squares2X2Icon,
   ListBulletIcon,
   PaperAirplaneIcon,
   ArrowLeftOnRectangleIcon,
-  XMarkIcon,
   ClockIcon,
-  TrashIcon
+  TrashIcon,
+  SparklesIcon
 } from '@heroicons/react/24/outline';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -107,7 +105,6 @@ export default function ChronosApp() {
     setIsProcessing(true);
 
     try {
-      // Send history so Chronos has memory of previous commands
       const result = await brainRef.current?.processMessage(
         msg, 
         refreshData, 
@@ -135,20 +132,21 @@ export default function ChronosApp() {
       setMessages(prev => [...prev, { id: Date.now().toString(), role: 'system', content: `Error: ${error.message}`, timestamp: new Date() }]);
     } finally {
       setIsProcessing(false);
+      refreshData();
     }
   };
 
   const handleDurationSelection = (mins: number, pending: any) => {
-    const start = new Date(pending.args.start);
-    const end = addMinutes(start, mins).toISOString();
-    const newMsg = `Proceed with creating "${pending.args.summary}" starting at ${pending.args.start} and ending at ${end} (Duration: ${mins} minutes).`;
-    handleSendMessage(newMsg);
+    const startStr = pending.args.start;
+    const endStr = format(addMinutes(parseISO(startStr), mins), "yyyy-MM-dd'T'HH:mm:ss");
+    const confirmationText = `Executing create_event: ${JSON.stringify({ ...pending.args, end: endStr })}`;
+    handleSendMessage(confirmationText, false, true);
   };
 
   const handlePickEvent = (event: CalendarEvent, pending: any) => {
     const newArgs = { ...pending.args, id: event.id, summary: event.summary };
-    const confirmationText = `Selected event "${event.summary}" (${event.id}). Proceed with ${pending.action}: ${JSON.stringify(newArgs)}`;
-    handleSendMessage(confirmationText, false, true);
+    const text = `I'm selecting "${event.summary}" for this action. Args: ${JSON.stringify(newArgs)}`;
+    handleSendMessage(text, false, false);
   };
 
   const handleConfirmedAction = (pending: any) => {
@@ -172,19 +170,21 @@ export default function ChronosApp() {
   };
 
   const toggleTask = async (task: CalendarTask) => {
-    if (!session?.accessToken) return;
+    if (!session?.accessToken || isProcessing) return;
+    setIsProcessing(true);
     try {
       await calendarService.updateTask(task.id, { completed: !task.completed }, session.accessToken as string);
-      refreshData();
+      await refreshData();
     } catch (e) { console.error(e); }
+    finally { setIsProcessing(false); }
   };
 
   if (status === "loading") {
     return (
       <div className="h-screen flex items-center justify-center bg-[#f8fafc]">
         <div className="flex flex-col items-center gap-4">
-          <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
-          <p className="text-slate-500 font-bold animate-pulse">Syncing with Chronos...</p>
+          <SparklesIcon className="w-12 h-12 text-blue-600 animate-pulse" />
+          <p className="text-slate-500 font-bold">Synchronizing Time...</p>
         </div>
       </div>
     );
@@ -193,14 +193,14 @@ export default function ChronosApp() {
   if (status === "unauthenticated") {
     return (
       <div className="h-screen flex items-center justify-center bg-[#f8fafc] p-6">
-        <div className="max-w-md w-full bg-white p-12 rounded-[2.5rem] shadow-2xl border border-slate-100 text-center space-y-8 animate-in fade-in zoom-in duration-500">
+        <div className="max-w-md w-full bg-white p-12 rounded-[2.5rem] shadow-2xl border border-slate-100 text-center space-y-8">
           <div className="w-24 h-24 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-3xl flex items-center justify-center text-white text-5xl font-bold mx-auto shadow-2xl rotate-3">C</div>
           <div className="space-y-2">
             <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight">Chronos AI</h1>
             <p className="text-slate-500 font-medium">Your schedule, simplified by intelligence.</p>
           </div>
-          <button onClick={() => signIn('google')} className="w-full bg-slate-900 text-white py-4 px-6 rounded-2xl font-bold hover:bg-slate-800 transition-all flex items-center justify-center gap-3 shadow-lg hover:shadow-xl active:scale-95">
-            Sign in with Google
+          <button onClick={() => signIn('google')} className="w-full bg-slate-900 text-white py-4 px-6 rounded-2xl font-bold hover:bg-slate-800 transition-all flex items-center justify-center gap-3 shadow-lg active:scale-95">
+            Get Started with Google
           </button>
         </div>
       </div>
@@ -209,24 +209,24 @@ export default function ChronosApp() {
 
   return (
     <div className="flex h-screen bg-[#f8fafc] font-sans text-slate-900 overflow-hidden">
-      <aside className="w-20 lg:w-64 bg-white border-r border-slate-200 flex flex-col p-4 space-y-8 transition-all">
+      <aside className="w-20 lg:w-64 bg-white border-r border-slate-200 flex flex-col p-4 space-y-8">
         <div className="flex items-center gap-4 px-2">
           <div className="w-10 h-10 min-w-10 bg-blue-600 rounded-xl flex items-center justify-center text-white font-bold text-xl shadow-lg">C</div>
           <span className="font-bold text-xl hidden lg:block tracking-tight">Chronos AI</span>
         </div>
         <nav className="flex-1 space-y-1">
-          <SidebarItem icon={<Squares2X2Icon className="w-6 h-6" />} label="Dashboard" active={activeTab === 'calendar'} onClick={() => setActiveTab('calendar')} />
+          <SidebarItem icon={<Squares2X2Icon className="w-6 h-6" />} label="Schedule" active={activeTab === 'calendar'} onClick={() => setActiveTab('calendar')} />
           <SidebarItem icon={<ListBulletIcon className="w-6 h-6" />} label="Tasks" active={activeTab === 'tasks'} onClick={() => setActiveTab('tasks')} />
-          <SidebarItem icon={<Cog6ToothIcon className="w-6 h-6" />} label="Settings" active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
+          <SidebarItem icon={<Cog6ToothIcon className="w-6 h-6" />} label="Account" active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
         </nav>
         <div className="px-2 pb-4">
           <div className="flex items-center gap-3 p-3 rounded-2xl bg-slate-50 border border-slate-100">
             {session?.user?.image ? (
               <img src={session.user.image} className="w-8 h-8 rounded-full shadow-sm" alt="User" />
             ) : (
-              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-orange-400 to-rose-400 shadow-sm" />
+              <div className="w-8 h-8 rounded-full bg-slate-300 shadow-sm" />
             )}
-            <div className="hidden lg:block overflow-hidden"><p className="text-sm font-bold truncate">{session?.user?.name || 'User'}</p></div>
+            <div className="hidden lg:block overflow-hidden"><p className="text-sm font-bold truncate">{session?.user?.name}</p></div>
           </div>
         </div>
       </aside>
@@ -235,22 +235,24 @@ export default function ChronosApp() {
         <header className="h-20 flex items-center justify-between px-8 bg-white border-b border-slate-200">
           <div className="flex items-center gap-6">
              <div className="flex items-center gap-2">
-                <button onClick={() => setCurrentDate(addDays(currentDate, -7))} className="p-2 hover:bg-slate-100 rounded-xl transition-colors text-slate-400"><ChevronLeftIcon className="w-5 h-5"/></button>
-                <button onClick={() => setCurrentDate(addDays(currentDate, 7))} className="p-2 hover:bg-slate-100 rounded-xl transition-colors text-slate-400"><ChevronRightIcon className="w-5 h-5"/></button>
+                <button onClick={() => setCurrentDate(addDays(currentDate, -7))} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400"><ChevronLeftIcon className="w-5 h-5"/></button>
+                <button onClick={() => setCurrentDate(addDays(currentDate, 7))} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400"><ChevronRightIcon className="w-5 h-5"/></button>
              </div>
              <h2 className="text-2xl font-bold tracking-tight">{format(currentDate, 'MMMM yyyy')}</h2>
           </div>
-          <button onClick={refreshData} className="p-2.5 hover:bg-slate-100 rounded-xl transition-colors text-slate-500 group"><ArrowPathIcon className={cn("w-5 h-5", isProcessing && "animate-spin")} /></button>
+          <button onClick={refreshData} className="p-2.5 hover:bg-slate-100 rounded-xl text-slate-500 transition-all active:rotate-180">
+            <ArrowPathIcon className={cn("w-5 h-5", isProcessing && "animate-spin")} />
+          </button>
         </header>
 
         <main className="flex-1 overflow-hidden flex flex-col p-6 space-y-6">
           {activeTab === 'calendar' && (
             <div className="flex-1 bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-              <div className="grid grid-cols-7 border-b border-slate-100 bg-slate-50/50">
+              <div className="grid grid-cols-7 border-b border-slate-100 bg-slate-50/30">
                 {weekDays.map(day => (
-                  <div key={day.toISOString()} className="flex flex-col items-center justify-center py-3 border-l first:border-l-0 border-slate-100">
-                    <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">{format(day, 'EEE')}</span>
-                    <span className={cn("text-lg font-bold mt-1 h-8 w-8 flex items-center justify-center rounded-full", isSameDay(day, new Date()) ? "bg-blue-600 text-white" : "text-slate-800")}>{format(day, 'd')}</span>
+                  <div key={day.toISOString()} className="flex flex-col items-center justify-center py-4 border-l first:border-l-0 border-slate-100">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{format(day, 'EEE')}</span>
+                    <span className={cn("text-lg font-black mt-1 h-9 w-9 flex items-center justify-center rounded-xl transition-all", isSameDay(day, new Date()) ? "bg-blue-600 text-white shadow-lg shadow-blue-200" : "text-slate-800")}>{format(day, 'd')}</span>
                   </div>
                 ))}
               </div>
@@ -258,19 +260,23 @@ export default function ChronosApp() {
                 {weekDays.map(day => {
                   const dayEvents = getEventsForDay(day);
                   return (
-                    <div key={day.toISOString()} className="border-l first:border-l-0 border-slate-100 p-3 space-y-3 overflow-y-auto custom-scrollbar bg-slate-50/10">
+                    <div key={day.toISOString()} className="border-l first:border-l-0 border-slate-100 p-3 space-y-3 overflow-y-auto custom-scrollbar hover:bg-slate-50/50 transition-colors">
                       {dayEvents.map(e => (
-                        <div key={e.id} className="bg-white border border-slate-200 p-3 rounded-2xl shadow-sm hover:shadow-md transition-all cursor-pointer group">
-                          <p className="text-xs font-bold text-slate-900 leading-tight group-hover:text-blue-600 transition-colors">{e.summary}</p>
+                        <div key={e.id} className="bg-white border border-slate-200 p-3 rounded-2xl shadow-sm hover:shadow-md transition-all cursor-pointer group hover:border-blue-400">
+                          <p className="text-xs font-bold text-slate-900 group-hover:text-blue-600 truncate">{e.summary}</p>
                           <div className="flex items-center gap-1.5 mt-2">
                             <ClockIcon className="w-3 h-3 text-slate-400" />
-                            <p className="text-[10px] text-slate-500 font-medium">
-                              {e.isAllDay ? 'All-day' : `${format(parseISO(e.start), 'h:mm a')} - ${format(parseISO(e.end), 'h:mm a')}`}
+                            <p className="text-[10px] text-slate-500 font-semibold uppercase">
+                              {e.isAllDay ? 'Day' : format(parseISO(e.start), 'h:mm a')}
                             </p>
                           </div>
                         </div>
                       ))}
-                      {dayEvents.length === 0 && <div className="h-full flex items-center justify-center"><p className="text-[10px] text-slate-300 font-bold uppercase tracking-widest rotate-90">Empty</p></div>}
+                      {dayEvents.length === 0 && (
+                        <div className="h-full flex flex-col items-center justify-center opacity-10">
+                          <div className="w-1.5 h-1.5 rounded-full bg-slate-300" />
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -281,17 +287,21 @@ export default function ChronosApp() {
           {activeTab === 'tasks' && (
             <div className="flex-1 bg-white rounded-3xl border border-slate-200 shadow-sm overflow-y-auto p-8 custom-scrollbar">
               <div className="max-w-2xl mx-auto space-y-6">
-                <h3 className="text-2xl font-bold flex items-center gap-3"><ListBulletIcon className="w-7 h-7 text-blue-600" />My Tasks</h3>
+                <div className="flex items-center justify-between">
+                  <h3 className="text-2xl font-bold flex items-center gap-3"><ListBulletIcon className="w-7 h-7 text-blue-600" />Today's Focus</h3>
+                  <span className="px-3 py-1 bg-blue-50 text-blue-600 rounded-full text-xs font-bold uppercase tracking-widest">{tasks.filter(t => !t.completed).length} Pending</span>
+                </div>
                 <div className="space-y-3">
                   {tasks.map(task => (
-                    <div key={task.id} className={cn("flex items-center justify-between p-4 rounded-2xl border cursor-pointer", task.completed ? "bg-slate-50 border-slate-100 opacity-60" : "bg-white border-slate-200 hover:border-blue-400")} onClick={() => toggleTask(task)}>
-                      <div className="flex items-center gap-4">
-                        <div className={cn("w-6 h-6 rounded-full border-2 flex items-center justify-center", task.completed ? "bg-green-500 border-green-500" : "border-slate-300")}>{task.completed && <CheckIcon className="w-3 h-3 text-white" />}</div>
+                    <div key={task.id} className={cn("group flex items-center justify-between p-5 rounded-2xl border transition-all", task.completed ? "bg-slate-50 border-slate-100 opacity-60" : "bg-white border-slate-200 hover:border-blue-300 hover:shadow-lg")}>
+                      <div className="flex items-center gap-5 cursor-pointer flex-1" onClick={() => toggleTask(task)}>
+                        <div className={cn("w-7 h-7 rounded-xl border-2 flex items-center justify-center transition-all", task.completed ? "bg-green-500 border-green-500 shadow-lg shadow-green-100" : "border-slate-200 bg-white")}>{task.completed && <CheckIcon className="w-4 h-4 text-white stroke-[4]" />}</div>
                         <div>
-                          <p className={cn("font-bold", task.completed && "line-through text-slate-400")}>{task.title}</p>
-                          {task.due && <p className="text-xs text-slate-400 font-medium mt-0.5">Due {format(parseISO(task.due), 'MMM d')}</p>}
+                          <p className={cn("font-bold text-slate-900", task.completed && "line-through text-slate-400")}>{task.title}</p>
+                          {task.due && <p className="text-xs text-slate-400 font-bold mt-1 uppercase tracking-tighter">By {format(parseISO(task.due), 'MMM d')}</p>}
                         </div>
                       </div>
+                      <button onClick={() => handleSendMessage(`Delete task ${task.title}`)} className="p-2 text-slate-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"><TrashIcon className="w-5 h-5"/></button>
                     </div>
                   ))}
                 </div>
@@ -300,77 +310,82 @@ export default function ChronosApp() {
           )}
 
           {activeTab === 'settings' && (
-             <div className="flex-1 bg-white rounded-3xl border border-slate-200 shadow-sm p-8 max-w-2xl mx-auto w-full">
-                <h3 className="text-xl font-bold border-b pb-4 mb-6">Account Settings</h3>
-                <button onClick={() => signOut()} className="w-full flex items-center justify-between p-4 bg-red-50 text-red-600 rounded-2xl font-bold hover:bg-red-100 transition-colors">
-                  <span>Sign Out of Chronos AI</span>
+             <div className="flex-1 bg-white rounded-3xl border border-slate-200 shadow-sm p-12 max-w-2xl mx-auto w-full text-center">
+                <div className="w-20 h-20 bg-slate-100 rounded-3xl mx-auto mb-6 flex items-center justify-center">
+                  <Cog6ToothIcon className="w-10 h-10 text-slate-400" />
+                </div>
+                <h3 className="text-xl font-bold mb-2">Account Control</h3>
+                <p className="text-slate-500 mb-10">Manage your connected Google services.</p>
+                <button onClick={() => signOut()} className="w-full flex items-center justify-center gap-3 p-5 bg-red-50 text-red-600 rounded-2xl font-bold hover:bg-red-100 transition-colors shadow-sm">
                   <ArrowLeftOnRectangleIcon className="w-5 h-5" />
+                  <span>Disconnect Account</span>
                 </button>
              </div>
           )}
         </main>
       </div>
 
-      <div className="w-[400px] bg-white border-l border-slate-200 flex flex-col shadow-xl z-20">
+      <div className="w-[420px] bg-white border-l border-slate-200 flex flex-col shadow-2xl z-20">
         <header className="h-20 flex items-center px-8 border-b border-slate-100">
-          <ChatBubbleLeftRightIcon className="w-5 h-5 text-blue-600 mr-2" />
-          <h3 className="font-extrabold text-lg">Chronos Brain</h3>
+          <div className="w-2 h-2 rounded-full bg-green-500 mr-3 animate-pulse" />
+          <h3 className="font-black text-slate-900 tracking-tighter text-xl">Chronos Brain</h3>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar">
+        <div className="flex-1 overflow-y-auto p-6 space-y-5 custom-scrollbar bg-slate-50/30">
           {messages.map((m) => (
-            <div key={m.id} className={cn("flex flex-col", m.role === 'user' ? 'items-end' : 'items-start')}>
-              <div className={cn("max-w-[90%] p-4 rounded-2xl text-sm shadow-sm", m.role === 'user' ? 'bg-blue-600 text-white' : 'bg-slate-50 text-slate-800')}>
+            <div key={m.id} className={cn("flex flex-col animate-in slide-in-from-bottom-3 duration-500", m.role === 'user' ? 'items-end' : 'items-start')}>
+              <div className={cn("max-w-[92%] p-5 rounded-3xl text-sm leading-relaxed shadow-sm", m.role === 'user' ? 'bg-slate-900 text-white font-medium rounded-br-none' : 'bg-white text-slate-800 border border-slate-100 rounded-bl-none')}>
                 {m.content}
+                
                 {m.ui?.type === 'duration' && (
-                  <div className="mt-4 p-3 bg-white rounded-xl border border-blue-100 space-y-3">
-                    <p className="text-[10px] font-bold text-blue-500 uppercase tracking-widest mb-2">Select Duration</p>
-                    <div className="grid grid-cols-3 gap-2">
-                      {m.ui.options?.map(mins => (
-                        <button key={mins} onClick={() => handleDurationSelection(mins, m.ui?.pending)} className="py-2 text-xs font-bold border border-slate-100 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition-all">{mins}m</button>
-                      ))}
-                    </div>
+                  <div className="mt-5 grid grid-cols-3 gap-2">
+                    {m.ui.options?.map(mins => (
+                      <button key={mins} onClick={() => handleDurationSelection(mins, m.ui?.pending)} className="py-3 px-1 text-[11px] font-black border border-slate-100 rounded-xl hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all active:scale-95">{mins}m</button>
+                    ))}
                   </div>
                 )}
+
                 {m.ui?.type === 'pick' && (
-                  <div className="mt-4 p-3 bg-white rounded-xl border border-indigo-100 space-y-2">
-                    <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest mb-2">Which Event?</p>
-                    <div className="space-y-1 max-h-48 overflow-y-auto custom-scrollbar">
-                      {m.ui.options?.map((ev: CalendarEvent) => (
-                        <button key={ev.id} onClick={() => handlePickEvent(ev, m.ui?.pending)} className="w-full text-left p-2 text-xs border border-slate-50 rounded-lg hover:bg-indigo-50 transition-all">
-                          <p className="font-bold text-slate-800 truncate">{ev.summary}</p>
-                          <p className="text-[10px] text-slate-400">{format(parseISO(ev.start), 'MMM d, h:mm a')}</p>
-                        </button>
-                      ))}
-                    </div>
+                  <div className="mt-5 space-y-2">
+                    {m.ui.options?.map((ev: CalendarEvent) => (
+                      <button key={ev.id} onClick={() => handlePickEvent(ev, m.ui?.pending)} className="w-full text-left p-4 text-xs border border-slate-100 rounded-2xl hover:bg-blue-50 hover:border-blue-200 transition-all">
+                        <p className="font-black text-slate-900 mb-1">{ev.summary}</p>
+                        <p className="text-[10px] text-slate-500 font-bold uppercase">{format(parseISO(ev.start), 'MMM d @ h:mm a')}</p>
+                      </button>
+                    ))}
                   </div>
                 )}
+
                 {m.ui?.type === 'confirm' && (
-                  <div className={cn("mt-4 p-4 rounded-xl border shadow-sm space-y-3", m.ui.action === 'delete_event' || m.ui.action === 'delete_task' ? 'bg-red-50 border-red-100' : 'bg-white border-amber-100')}>
-                    <div className="flex items-center gap-2">
-                      {m.ui.action === 'delete_event' || m.ui.action === 'delete_task' ? <TrashIcon className="w-4 h-4 text-red-600" /> : <ClockIcon className="w-4 h-4 text-amber-600" />}
-                      <p className={cn("text-xs font-bold", m.ui.action === 'delete_event' || m.ui.action === 'delete_task' ? 'text-red-700' : 'text-amber-700')}>{m.ui.message}</p>
-                    </div>
-                    <div className="flex gap-2">
-                      <button onClick={() => handleConfirmedAction(m.ui?.pending)} className={cn("flex-1 py-2 rounded-lg text-xs font-bold text-white transition-all shadow-sm active:scale-95", m.ui.action === 'delete_event' || m.ui.action === 'delete_task' ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700')}>Confirm</button>
-                      <button onClick={() => setMessages(prev => prev.filter(msg => msg.id !== m.id))} className="flex-1 bg-slate-100 text-slate-600 py-2 rounded-lg text-xs font-bold hover:bg-slate-200">Cancel</button>
-                    </div>
+                  <div className="mt-5 flex gap-3">
+                    <button onClick={() => handleConfirmedAction(m.ui?.pending)} className={cn("flex-1 py-3.5 rounded-2xl text-[11px] font-black uppercase tracking-widest text-white shadow-lg active:scale-95 transition-all", m.ui.action?.includes('delete') || m.ui.action === 'clear_day' ? 'bg-red-600 shadow-red-100' : 'bg-blue-600 shadow-blue-100')}>Confirm</button>
+                    <button onClick={() => setMessages(prev => prev.filter(msg => msg.id !== m.id))} className="flex-1 bg-slate-100 text-slate-900 py-3.5 rounded-2xl text-[11px] font-black uppercase tracking-widest active:scale-95 transition-all">Dismiss</button>
                   </div>
                 )}
               </div>
-              <span className="text-[10px] text-slate-300 font-bold mt-1 px-1">{format(m.timestamp, 'h:mm a')}</span>
+              <span className="text-[9px] text-slate-400 font-black mt-2 px-2 uppercase tracking-tighter">{format(m.timestamp, 'h:mm a')}</span>
             </div>
           ))}
-          {isProcessing && <div className="flex gap-1 p-2"><div className="w-1 h-1 bg-slate-300 rounded-full animate-bounce" /><div className="w-1 h-1 bg-slate-300 rounded-full animate-bounce [animation-delay:0.2s]" /><div className="w-1 h-1 bg-slate-300 rounded-full animate-bounce [animation-delay:0.4s]" /></div>}
+          {isProcessing && (
+            <div className="flex gap-1.5 p-4 items-center bg-white rounded-3xl border border-slate-50 shadow-sm w-fit">
+              <div className="w-1.5 h-1.5 bg-blue-600 rounded-full animate-bounce" />
+              <div className="w-1.5 h-1.5 bg-blue-600 rounded-full animate-bounce [animation-delay:0.2s]" />
+              <div className="w-1.5 h-1.5 bg-blue-600 rounded-full animate-bounce [animation-delay:0.4s]" />
+            </div>
+          )}
           <div ref={chatEndRef} />
         </div>
 
-        <div className="p-6 border-t border-slate-100">
-          <div className="relative">
-            <input value={inputText} onChange={e => setInputText(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSendMessage()} placeholder="Ask Chronos..." className="w-full bg-slate-50 border-none rounded-2xl pl-5 pr-20 py-4 text-sm font-medium focus:ring-2 focus:ring-blue-500 shadow-inner" />
-            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1">
-              <button onClick={toggleListening} className={cn("p-2 rounded-xl transition-all", isListening ? 'bg-red-500 text-white' : 'text-slate-400 hover:text-blue-600')}>{isListening ? <StopIcon className="w-5 h-5" /> : <MicrophoneIcon className="w-5 h-5" />}</button>
-              <button onClick={() => handleSendMessage()} disabled={!inputText.trim()} className="p-2 bg-blue-600 text-white rounded-xl disabled:opacity-50"><PaperAirplaneIcon className="w-5 h-5" /></button>
+        <div className="p-8 border-t border-slate-100 bg-white">
+          <div className="relative group">
+            <input value={inputText} onChange={e => setInputText(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSendMessage()} placeholder="Tell Chronos what's next..." className="w-full bg-slate-50 border-none rounded-[1.5rem] pl-6 pr-24 py-5 text-sm font-semibold focus:ring-4 focus:ring-blue-100 shadow-inner transition-all placeholder:text-slate-300" />
+            <div className="absolute right-3 top-1/2 -translate-y-1/2 flex gap-1">
+              <button onClick={toggleListening} className={cn("p-2.5 rounded-2xl transition-all", isListening ? 'bg-red-500 text-white shadow-xl' : 'text-slate-400 hover:text-slate-900')}>
+                {isListening ? <StopIcon className="w-6 h-6" /> : <MicrophoneIcon className="w-6 h-6" />}
+              </button>
+              <button onClick={() => handleSendMessage()} disabled={!inputText.trim() || isProcessing} className="p-2.5 bg-blue-600 text-white rounded-2xl disabled:opacity-50 transition-all active:scale-90 shadow-lg shadow-blue-100 disabled:shadow-none">
+                <PaperAirplaneIcon className="w-6 h-6" />
+              </button>
             </div>
           </div>
         </div>
@@ -381,10 +396,10 @@ export default function ChronosApp() {
 
 function SidebarItem({ icon, label, active = false, onClick }: { icon: React.ReactNode, label: string, active?: boolean, onClick?: () => void }) {
   return (
-    <button onClick={onClick} className={cn("w-full flex items-center gap-4 p-4 rounded-2xl transition-all group relative", active ? "bg-blue-50 text-blue-600 font-bold" : "text-slate-400 hover:bg-slate-50 hover:text-slate-600")}>
+    <button onClick={onClick} className={cn("w-full flex items-center gap-5 p-4 rounded-2xl transition-all group relative", active ? "bg-slate-900 text-white font-black shadow-xl" : "text-slate-400 hover:bg-slate-50 hover:text-slate-900")}>
       {icon}
       <span className="hidden lg:block text-sm tracking-tight">{label}</span>
-      {active && <div className="absolute right-2 w-1.5 h-1.5 bg-blue-600 rounded-full" />}
+      {active && <div className="absolute right-3 w-2 h-2 bg-blue-500 rounded-full shadow-lg shadow-blue-400" />}
     </button>
   );
 }

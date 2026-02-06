@@ -1,3 +1,4 @@
+
 import { CalendarEvent, CalendarTask } from '../types';
 
 const BASE_URL = 'https://www.googleapis.com/calendar/v3';
@@ -10,15 +11,33 @@ export const setCalendarToken = (token: string) => {
   accessToken = token;
 };
 
+/**
+ * Normalizes input to YYYY-MM-DDTHH:mm:ss without timezone/offset for America/New_York.
+ * Google API takes { dateTime: "...", timeZone: "..." } to handle the actual offset.
+ */
 function normalizeNYDateTime(input: string | Date): string {
   if (typeof input === 'string') {
-    const stripped = input.replace(/(Z|[+-]\d{2}:\d{2})$/, '');
+    // Remove any existing timezone suffix (Z or +HH:mm or -HH:mm)
+    let stripped = input.replace(/(Z|[+-]\d{2}:\d{2})$/, '');
+    
+    // Handle YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}$/.test(stripped)) {
+      return `${stripped}T00:00:00`;
+    }
+    
+    // Handle YYYY-MM-DDTHH:mm
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(stripped)) {
+      return `${stripped}:00`;
+    }
+
+    // Basic validation of standard format
     const match = stripped.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})/);
     if (match) return match[1];
-    if (/^\d{4}-\d{2}-\d{2}$/.test(stripped)) return `${stripped}T00:00:00`;
+    
     return stripped;
   }
 
+  // Handle Date object by formatting it in NY timezone
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone: TIMEZONE,
     year: 'numeric',
@@ -89,7 +108,7 @@ export const calendarService = {
     const data = await calendarFetch(`/calendars/primary/events?${params}`, token);
     return (data.items || []).map((item: any) => ({
       id: item.id,
-      summary: item.summary,
+      summary: item.summary || '(No Title)',
       description: item.description,
       start: item.start.dateTime || item.start.date,
       end: item.end.dateTime || item.end.date,
@@ -99,11 +118,21 @@ export const calendarService = {
   },
 
   createEvent: async (event: Omit<CalendarEvent, 'id'>, token: string | null = null): Promise<CalendarEvent> => {
+    const normalizedStart = normalizeNYDateTime(event.start);
+    let normalizedEnd = normalizeNYDateTime(event.end || event.start);
+    
+    // Simple check: if end <= start, default to 1 hour
+    if (new Date(normalizedEnd) <= new Date(normalizedStart)) {
+      const d = new Date(normalizedStart);
+      d.setHours(d.getHours() + 1);
+      normalizedEnd = normalizeNYDateTime(d);
+    }
+
     const body = {
       summary: event.summary,
       description: event.description,
-      start: { dateTime: normalizeNYDateTime(event.start), timeZone: TIMEZONE },
-      end: { dateTime: normalizeNYDateTime(event.end || event.start), timeZone: TIMEZONE },
+      start: { dateTime: normalizedStart, timeZone: TIMEZONE },
+      end: { dateTime: normalizedEnd, timeZone: TIMEZONE },
     };
     const data = await calendarFetch('/calendars/primary/events', token, {
       method: 'POST',
