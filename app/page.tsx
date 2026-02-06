@@ -1,4 +1,3 @@
-
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
@@ -48,6 +47,14 @@ export default function ChronosApp() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
 
+  // Set AI tab as default on mobile on initial load
+  useEffect(() => {
+    const isMobile = window.innerWidth < 1024;
+    if (isMobile) {
+      setActiveTab('chat');
+    }
+  }, []);
+
   useEffect(() => {
     brainRef.current = new ChronosBrain();
     if (typeof window !== 'undefined' && ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
@@ -85,7 +92,9 @@ export default function ChronosApp() {
   }, [status, refreshData]);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (activeTab === 'chat' || (typeof window !== 'undefined' && window.innerWidth >= 1024)) {
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
   }, [messages, activeTab]);
 
   const handleSendMessage = async (text?: string, voice: boolean = false, confirmed: boolean = false) => {
@@ -198,7 +207,7 @@ export default function ChronosApp() {
 
   if (status === "loading") {
     return (
-      <div className="h-screen flex items-center justify-center bg-[#f8fafc]">
+      <div className="h-[100dvh] flex items-center justify-center bg-[#f8fafc]">
         <div className="flex flex-col items-center gap-4">
           <SparklesIcon className="w-12 h-12 text-blue-600 animate-bounce" />
           <p className="text-slate-500 font-bold">Synchronizing Time...</p>
@@ -209,8 +218,8 @@ export default function ChronosApp() {
 
   if (status === "unauthenticated") {
     return (
-      <div className="h-screen flex items-center justify-center bg-[#f8fafc] p-6">
-        <div className="max-w-md w-full bg-white p-8 lg:p-12 rounded-[2.5rem] shadow-2xl border border-slate-100 text-center space-y-8">
+      <div className="h-[100dvh] flex items-center justify-center bg-[#f8fafc] p-6 overflow-hidden">
+        <div className="max-w-md w-full bg-white p-8 lg:p-12 rounded-[2.5rem] shadow-2xl border border-slate-100 text-center space-y-8 animate-in fade-in zoom-in duration-500">
           <div className="w-20 h-20 lg:w-24 lg:h-24 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-3xl flex items-center justify-center text-white text-4xl lg:text-5xl font-bold mx-auto shadow-2xl rotate-3">C</div>
           <div className="space-y-2">
             <h1 className="text-3xl lg:text-4xl font-extrabold text-slate-900 tracking-tight">Chronos AI</h1>
@@ -225,7 +234,7 @@ export default function ChronosApp() {
   }
 
   return (
-    <div className="flex flex-col lg:flex-row h-screen bg-[#f8fafc] font-sans text-slate-900 overflow-hidden">
+    <div className="flex flex-col lg:flex-row h-[100dvh] max-h-[100dvh] bg-[#f8fafc] font-sans text-slate-900 overflow-hidden overscroll-none">
       {/* Desktop Sidebar */}
       <aside className="hidden lg:flex w-64 bg-white border-r border-slate-200 flex-col p-4 space-y-8">
         <div className="flex items-center gap-4 px-2">
@@ -251,7 +260,7 @@ export default function ChronosApp() {
 
       {/* Main Area */}
       <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden pb-16 lg:pb-0">
-        <header className="h-16 lg:h-20 flex items-center justify-between px-4 lg:px-8 bg-white border-b border-slate-200 sticky top-0 z-30">
+        <header className="h-16 lg:h-20 flex items-center justify-between px-4 lg:px-8 bg-white border-b border-slate-200 flex-shrink-0">
           <div className="flex items-center gap-2 lg:gap-6">
              <div className="flex items-center gap-1 lg:gap-2">
                 <button onClick={() => setCurrentDate(prev => addDays(prev, -1))} className="p-1.5 lg:p-2 hover:bg-slate-100 rounded-xl text-slate-400 transition-colors"><ChevronLeftIcon className="w-4 h-4 lg:w-5 lg:h-5"/></button>
@@ -265,10 +274,10 @@ export default function ChronosApp() {
           </button>
         </header>
 
-        <main className="flex-1 overflow-hidden flex flex-col p-3 lg:p-6 space-y-4 lg:space-y-6">
+        <main className="flex-1 overflow-hidden p-3 lg:p-6 flex flex-col min-h-0">
           {activeTab === 'calendar' && (
-            <div className="flex-1 bg-white rounded-[2rem] lg:rounded-3xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-              <div className="grid grid-cols-3 border-b border-slate-100 bg-slate-50/30">
+            <div className="flex-1 bg-white rounded-[2rem] lg:rounded-3xl border border-slate-200 shadow-sm overflow-hidden flex flex-col min-h-0">
+              <div className="grid grid-cols-3 border-b border-slate-100 bg-slate-50/30 flex-shrink-0">
                 {displayDays.map(day => (
                   <div key={day.toISOString()} className="flex flex-col items-center justify-center py-2 lg:py-4 border-l first:border-l-0 border-slate-100">
                     <span className="text-[8px] lg:text-[10px] font-bold text-slate-400 uppercase tracking-widest">{format(day, 'EEE')}</span>
@@ -278,9 +287,9 @@ export default function ChronosApp() {
                   </div>
                 ))}
               </div>
-              <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 overflow-hidden">
-                {/* On mobile, only show events for current logic date to focus better */}
-                <div className="lg:hidden flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar bg-white">
+              <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 overflow-hidden min-h-0">
+                {/* Mobile: Single-column events scrollable area */}
+                <div className="lg:hidden flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar bg-white overscroll-contain">
                   {getEventsForDay(currentDate).map(e => (
                     <EventCard key={e.id} event={e} onClick={() => { setActiveTab('chat'); handleSendMessage(`Tell me about ${e.summary}`); }} />
                   ))}
@@ -288,7 +297,7 @@ export default function ChronosApp() {
                 </div>
                 {/* Desktop Multi-column view */}
                 {displayDays.map(day => (
-                  <div key={day.toISOString()} className="hidden lg:block border-l first:border-l-0 border-slate-100 p-4 space-y-4 overflow-y-auto custom-scrollbar hover:bg-slate-50/50 transition-colors">
+                  <div key={day.toISOString()} className="hidden lg:block border-l first:border-l-0 border-slate-100 p-4 space-y-4 overflow-y-auto custom-scrollbar hover:bg-slate-50/50 transition-colors overscroll-contain">
                     {getEventsForDay(day).map(e => (
                       <EventCard key={e.id} event={e} onClick={() => handleSendMessage(`Tell me about ${e.summary}`)} />
                     ))}
@@ -300,7 +309,7 @@ export default function ChronosApp() {
           )}
 
           {activeTab === 'tasks' && (
-            <div className="flex-1 bg-white rounded-[2rem] lg:rounded-3xl border border-slate-200 shadow-sm overflow-y-auto p-4 lg:p-8 custom-scrollbar">
+            <div className="flex-1 bg-white rounded-[2rem] lg:rounded-3xl border border-slate-200 shadow-sm overflow-y-auto p-4 lg:p-8 custom-scrollbar overscroll-contain min-h-0">
               <div className="max-w-2xl mx-auto space-y-6 lg:space-y-8">
                 <div className="flex items-center justify-between">
                   <div>
@@ -309,7 +318,7 @@ export default function ChronosApp() {
                   </div>
                   <span className="px-3 py-1 lg:px-4 lg:py-1.5 bg-blue-50 text-blue-600 rounded-full text-[10px] lg:text-xs font-black uppercase tracking-widest">{tasks.filter(t => !t.completed).length} Pending</span>
                 </div>
-                <div className="space-y-3 lg:space-y-4">
+                <div className="space-y-3 lg:space-y-4 pb-4">
                   {tasks.length > 0 ? tasks.map(task => (
                     <div key={task.id} className={cn("group flex items-center justify-between p-4 lg:p-5 rounded-2xl border transition-all duration-300", task.completed ? "bg-slate-50 border-slate-100 opacity-60" : "bg-white border-slate-200 hover:border-blue-300 hover:shadow-xl")}>
                       <div className="flex items-center gap-4 lg:gap-5 cursor-pointer flex-1" onClick={() => toggleTask(task)}>
@@ -333,7 +342,7 @@ export default function ChronosApp() {
           )}
 
           {activeTab === 'settings' && (
-             <div className="flex-1 bg-white rounded-[2rem] lg:rounded-3xl border border-slate-200 shadow-sm p-6 lg:p-12 max-w-2xl mx-auto w-full text-center flex flex-col justify-center">
+             <div className="flex-1 bg-white rounded-[2rem] lg:rounded-3xl border border-slate-200 shadow-sm p-6 lg:p-12 max-w-2xl mx-auto w-full text-center flex flex-col justify-center overflow-y-auto overscroll-contain min-h-0">
                 <div className="w-20 h-20 lg:w-24 lg:h-24 bg-slate-100 rounded-[1.75rem] lg:rounded-[2rem] mx-auto mb-6 lg:mb-8 flex items-center justify-center">
                   <Cog6ToothIcon className="w-10 h-10 lg:w-12 lg:h-12 text-slate-400" />
                 </div>
@@ -347,7 +356,7 @@ export default function ChronosApp() {
           )}
 
           {activeTab === 'chat' && (
-            <div className="lg:hidden flex-1 flex flex-col bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden">
+            <div className="lg:hidden flex-1 flex flex-col bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden min-h-0">
                <ChatInterface 
                   messages={messages} 
                   inputText={inputText} 
@@ -368,8 +377,8 @@ export default function ChronosApp() {
       </div>
 
       {/* Desktop Chat Sidebar */}
-      <div className="hidden lg:flex w-[400px] xl:w-[440px] bg-white border-l border-slate-200 flex-col shadow-2xl z-20">
-        <header className="h-20 flex items-center px-8 border-b border-slate-100 justify-between">
+      <div className="hidden lg:flex w-[400px] xl:w-[440px] bg-white border-l border-slate-200 flex-col shadow-2xl z-20 overflow-hidden h-full">
+        <header className="h-20 flex items-center px-8 border-b border-slate-100 justify-between flex-shrink-0">
           <div className="flex items-center">
             <div className="w-2.5 h-2.5 rounded-full bg-green-500 mr-3 shadow-lg shadow-green-200 animate-pulse" />
             <h3 className="font-black text-slate-900 tracking-tighter text-xl">Assistant</h3>
@@ -393,7 +402,7 @@ export default function ChronosApp() {
       </div>
 
       {/* Mobile Tab Bar */}
-      <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 flex items-center justify-around h-16 z-50 px-2 pb-safe">
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 flex items-center justify-around h-16 z-50 px-2 pb-safe shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
          <MobileNavItem icon={<Squares2X2Icon className="w-6 h-6"/>} active={activeTab === 'calendar'} onClick={() => setActiveTab('calendar')} label="Schedule" />
          <MobileNavItem icon={<ListBulletIcon className="w-6 h-6"/>} active={activeTab === 'tasks'} onClick={() => setActiveTab('tasks')} label="Tasks" />
          <MobileNavItem icon={<CpuChipIcon className="w-7 h-7"/>} active={activeTab === 'chat'} onClick={() => setActiveTab('chat')} label="AI" />
@@ -446,8 +455,8 @@ function ChatInterface({
   handleSendMessage, handleDurationSelection, handlePickEvent, handleConfirmedAction, setMessages, chatEndRef 
 }: any) {
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-6 custom-scrollbar bg-slate-50/40">
+    <div className="flex-1 flex flex-col overflow-hidden h-full">
+      <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-6 custom-scrollbar bg-slate-50/40 overscroll-contain">
         {messages.length === 0 && (
            <div className="h-full flex flex-col items-center justify-center text-center p-8 space-y-4 opacity-40">
               <ChatBubbleLeftRightIcon className="w-12 h-12 text-slate-300" />
@@ -498,7 +507,7 @@ function ChatInterface({
         <div ref={chatEndRef} />
       </div>
 
-      <div className="p-4 lg:p-8 border-t border-slate-100 bg-white">
+      <div className="p-4 lg:p-8 border-t border-slate-100 bg-white flex-shrink-0">
         <div className="relative group">
           <input value={inputText} onChange={e => setInputText(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSendMessage()} placeholder="Tell Chronos what's next..." className="w-full bg-slate-50 border-none rounded-2xl lg:rounded-[1.75rem] pl-4 lg:pl-7 pr-20 lg:pr-24 py-4 lg:py-5 text-sm font-semibold focus:ring-2 lg:focus:ring-4 focus:ring-blue-100 transition-all placeholder:text-slate-300" />
           <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1">
