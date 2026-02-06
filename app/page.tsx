@@ -6,7 +6,7 @@ import { useSession, signIn, signOut } from "next-auth/react";
 import { CalendarEvent, CalendarTask, ChatMessage } from '../types';
 import { calendarService, setCalendarToken } from '../services/calendar';
 import { ChronosBrain, decodeAudio, playPcmAudio } from '../services/gemini.client';
-import { format, eachDayOfInterval, addDays, isSameDay, parseISO, addMinutes, startOfDay, endOfDay, isWithinInterval } from 'date-fns';
+import { format, eachDayOfInterval, addDays, isSameDay, parseISO, addMinutes, startOfDay, endOfDay, subDays } from 'date-fns';
 import { 
   ChatBubbleLeftRightIcon, 
   MicrophoneIcon, 
@@ -65,7 +65,6 @@ export default function ChronosApp() {
     if (!session?.accessToken) return;
     try {
       setCalendarToken(session.accessToken as string);
-      // Fetch a bit more range than just 3 days to ensure multi-day events spanning into current window are caught
       const timeMin = startOfDay(addDays(currentDate, -7)).toISOString();
       const timeMax = endOfDay(addDays(currentDate, 14)).toISOString();
       const [evs, tks] = await Promise.all([
@@ -175,10 +174,18 @@ export default function ChronosApp() {
     
     return events.filter(e => {
       const eStart = parseISO(e.start);
-      const eEnd = parseISO(e.end);
+      // For all-day events, the end date is exclusive (e.g., Dec 8-Dec 9 means only Dec 8).
+      // We adjust the logical end for comparison by subtracting 1ms.
+      const eEnd = e.isAllDay ? subDays(parseISO(e.end), 0) : parseISO(e.end);
       
-      // Check if event overlaps with the given day
-      // Overlap condition: (Event Start <= Day End) AND (Event End >= Day Start)
+      if (e.isAllDay) {
+        // Correct overlap logic for all-day exclusive end dates:
+        // Event occurs on day if (Event Start < Day End) AND (Event End > Day Start)
+        // With Google's YYYY-MM-DD: Start 00:00:00 of Day 1, End 00:00:00 of Day (N+1)
+        const exclusiveEnd = parseISO(e.end);
+        return eStart < dayEnd && exclusiveEnd > dayStart;
+      }
+      
       return eStart <= dayEnd && eEnd >= dayStart;
     }).sort((a, b) => parseISO(a.start).getTime() - parseISO(b.start).getTime());
   };
@@ -282,7 +289,13 @@ export default function ChronosApp() {
                   return (
                     <div key={day.toISOString()} className="border-l first:border-l-0 border-slate-100 p-4 space-y-4 overflow-y-auto custom-scrollbar hover:bg-slate-50/50 transition-colors">
                       {dayEvents.map(e => {
-                        const isMultiDay = !isSameDay(parseISO(e.start), parseISO(e.end));
+                        const startDt = parseISO(e.start);
+                        const endDt = parseISO(e.end);
+                        // All-day multi-day logic: subtract 1 day from exclusive end to check if it's truly multi-day
+                        const isMultiDay = e.isAllDay 
+                          ? !isSameDay(startDt, subDays(endDt, 1))
+                          : !isSameDay(startDt, endDt);
+
                         return (
                           <div key={e.id} onClick={() => handleSendMessage(`Tell me about ${e.summary}`)} className={cn(
                             "bg-white border p-3.5 rounded-2xl shadow-sm hover:shadow-md transition-all cursor-pointer group hover:border-blue-400 relative overflow-hidden",
@@ -293,12 +306,12 @@ export default function ChronosApp() {
                             <div className="flex items-center gap-1.5 mt-2.5">
                               <ClockIcon className="w-3.5 h-3.5 text-slate-400" />
                               <p className="text-[11px] text-slate-500 font-bold uppercase tracking-tight">
-                                {e.isAllDay ? 'All Day' : `${format(parseISO(e.start), 'h:mm a')} - ${format(parseISO(e.end), 'h:mm a')}`}
+                                {e.isAllDay ? 'All Day' : `${format(startDt, 'h:mm a')} - ${format(endDt, 'h:mm a')}`}
                               </p>
                             </div>
                             {isMultiDay && (
                               <p className="text-[9px] text-slate-400 font-bold mt-1.5 uppercase">
-                                {format(parseISO(e.start), 'MMM d')} → {format(parseISO(e.end), 'MMM d')}
+                                {format(startDt, 'MMM d')} → {format(e.isAllDay ? subDays(endDt, 1) : endDt, 'MMM d')}
                               </p>
                             )}
                           </div>
