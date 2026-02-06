@@ -5,12 +5,12 @@ import { calendarService } from "./calendar";
 const calendarTools: FunctionDeclaration[] = [
   {
     name: "list_events",
-    description: "Search/list calendar events.",
+    description: "Search or list calendar events. Use timeMin and timeMax to filter.",
     parameters: {
       type: Type.OBJECT,
       properties: {
-        timeMin: { type: Type.STRING, description: "ISO string (Z or Offset)" },
-        timeMax: { type: Type.STRING, description: "ISO string (Z or Offset)" }
+        timeMin: { type: Type.STRING, description: "ISO string start time." },
+        timeMax: { type: Type.STRING, description: "ISO string end time." }
       }
     }
   },
@@ -41,7 +41,7 @@ const calendarTools: FunctionDeclaration[] = [
   },
   {
     name: "update_event",
-    description: "Modify an existing event. Provide 'id' if known.",
+    description: "Modify an existing event. Provide 'id' if known. If id is missing, the agent will look for events first.",
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -64,7 +64,7 @@ const calendarTools: FunctionDeclaration[] = [
   },
   {
     name: "list_tasks",
-    description: "Get user tasks."
+    description: "Get user tasks from the default list."
   },
   {
     name: "create_task",
@@ -73,7 +73,7 @@ const calendarTools: FunctionDeclaration[] = [
       type: Type.OBJECT,
       properties: {
         title: { type: Type.STRING },
-        dueDate: { type: Type.STRING, description: "YYYY-MM-DD" },
+        dueDate: { type: Type.STRING, description: "YYYY-MM-DD format" },
         notes: { type: Type.STRING }
       },
       required: ["title"]
@@ -88,14 +88,14 @@ const calendarTools: FunctionDeclaration[] = [
         id: { type: Type.STRING },
         title: { type: Type.STRING },
         completed: { type: Type.BOOLEAN },
-        dueDate: { type: Type.STRING }
+        dueDate: { type: Type.STRING, description: "YYYY-MM-DD format" }
       },
       required: ["id"]
     }
   },
   {
     name: "delete_task",
-    description: "Remove a task.",
+    description: "Remove a task by ID.",
     parameters: {
       type: Type.OBJECT,
       properties: { id: { type: Type.STRING } },
@@ -153,10 +153,13 @@ export async function processChatAction(message: string, history: any[], accessT
   const ai = new GoogleGenAI({ apiKey });
   const currentNYTime = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
 
-  const systemInstruction = `You are Chronos AI, a smart calendar concierge.
-  TIMEZONE: America/New_York.
-  TIME: ${currentNYTime}.
-  Always use tools for schedule changes. Require confirmation for deletions.`;
+  const systemInstruction = `You are Chronos AI, an advanced, proactive calendar concierge.
+  CURRENT CONTEXT:
+  - Local Time: ${currentNYTime} (America/New_York)
+  - You can view, create, remove (delete), and edit (update) events and tasks.
+  - For removals (deleting events/tasks), ALWAYS ask for confirmation first.
+  - If a user asks to modify or delete an event without an ID, use list_events to find it first.
+  - Be concise, friendly, and efficient.`;
 
   const mappedHistory = history
     .filter(h => h.role === 'user' || h.role === 'assistant')
@@ -179,17 +182,17 @@ export async function processChatAction(message: string, history: any[], accessT
   let lastToolExecuted = "";
   let lastResult: any = null;
   let toolRounds = 0;
-  const maxRounds = 3;
+  const maxRounds = 5; // Increased to allow discovery of events before deletion/update
 
   while (response.functionCalls && response.functionCalls.length > 0 && toolRounds < maxRounds) {
     const parts: Part[] = [];
     for (const call of response.functionCalls) {
       lastToolExecuted = call.name;
 
-      // Sensitive UI Interceptors
+      // Sensitive UI Interceptors - Force confirmation via UI
       if (call.name === "clear_day" || call.name === "delete_event" || call.name === "delete_task") {
         return {
-          text: `Should I go ahead and ${call.name.replace('_', ' ')}?`,
+          text: `I've prepared the ${call.name.replace('_', ' ')} action for you. Please confirm to proceed.`,
           ui: {
             type: "confirm",
             action: call.name,
@@ -199,13 +202,16 @@ export async function processChatAction(message: string, history: any[], accessT
         };
       }
 
+      // If updating/deleting without an ID, the model should naturally call list_events first.
+      // But if it reaches here with update_event and no ID, we help it out.
       if (call.name === "update_event" && !call.args.id) {
+        // Find events around the requested time if possible, or just recent ones.
         const events = await calendarService.getEvents(undefined, undefined, accessToken);
         return {
-          text: "I found multiple events. Which one should I modify?",
+          text: "I found multiple events in your calendar. Which one would you like me to update?",
           ui: {
             type: "pick",
-            options: events.slice(0, 6),
+            options: events.slice(0, 8),
             pending: { action: "update_event", args: call.args }
           }
         };
@@ -220,7 +226,7 @@ export async function processChatAction(message: string, history: any[], accessT
           case "list_tasks": result = await calendarService.getTasks(accessToken); break;
           case "create_task": result = await calendarService.createTask(call.args as any, accessToken); break;
           case "update_task": result = await calendarService.updateTask(call.args.id as string, call.args as any, accessToken); break;
-          default: result = { status: "unknown_tool" };
+          default: result = { status: "unknown_tool", message: "This tool is currently being handled manually or is not implemented." };
         }
       } catch (e: any) {
         result = { error: e.message };
@@ -229,17 +235,17 @@ export async function processChatAction(message: string, history: any[], accessT
       parts.push({ functionResponse: { name: call.name, response: wrapToolResult(result) } });
     }
 
-    // Fixed: Passing structured message object for tool response
-    response = await chat.sendMessage({ message: { role: 'user', parts } });
+    // Fix: Pass parts array directly to message. Do not include 'role'.
+    response = await chat.sendMessage({ message: parts });
     toolRounds++;
   }
 
   let finalOutput = extractModelText(response);
   if (!finalOutput && lastToolExecuted) {
-    finalOutput = lastResult?.error ? `Error: ${lastResult.error}` : `I've finished the ${lastToolExecuted.replace('_', ' ')}.`;
+    finalOutput = lastResult?.error ? `I encountered an issue: ${lastResult.error}` : `The ${lastToolExecuted.replace('_', ' ')} has been handled.`;
   }
 
-  return { text: finalOutput || "Done." };
+  return { text: finalOutput || "I've processed your request." };
 }
 
 export async function processTTSAction(text: string) {
