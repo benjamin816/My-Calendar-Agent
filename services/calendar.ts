@@ -12,11 +12,24 @@ export const setCalendarToken = (token: string) => {
 };
 
 /**
- * Normalizes any date input to a New York local ISO string (YYYY-MM-DDTHH:mm:ss).
- * This "floating" time is sent to Google with the New York timezone ID.
+ * Normalizes input to a floating NY local ISO string (YYYY-MM-DDTHH:mm:ss).
+ * If input is a string with timezone info (Z or offset), it STRIPS it to preserve
+ * the literal time intended by the user/model for the target timezone.
  */
-function formatNY(date: Date | string): string {
-  // Use Intl to format exactly into the parts we need for NY
+function normalizeNYDateTime(input: string | Date): string {
+  if (typeof input === 'string') {
+    // If it's a full ISO string (e.g. 2024-10-25T18:00:00.000Z), 
+    // we take the first 19 chars to treat it as a floating local time.
+    const match = input.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})/);
+    if (match) return match[1];
+    
+    // If it's just a date (YYYY-MM-DD), add time
+    if (/^\d{4}-\d{2}-\d{2}$/.test(input)) return `${input}T00:00:00`;
+    
+    return input;
+  }
+
+  // If input is a Date object (like 'now'), format specifically for NY
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone: TIMEZONE,
     year: 'numeric',
@@ -28,10 +41,9 @@ function formatNY(date: Date | string): string {
     hour12: false,
   });
 
-  const parts = formatter.formatToParts(new Date(date));
+  const parts = formatter.formatToParts(input);
   const getPart = (type: string) => parts.find(p => p.type === type)?.value;
 
-  // Construct YYYY-MM-DDTHH:mm:ss
   return `${getPart('year')}-${getPart('month')}-${getPart('day')}T${getPart('hour')}:${getPart('minute')}:${getPart('second')}`;
 }
 
@@ -104,8 +116,8 @@ export const calendarService = {
     const body = {
       summary: event.summary,
       description: event.description,
-      start: { dateTime: formatNY(event.start), timeZone: TIMEZONE },
-      end: { dateTime: formatNY(event.end), timeZone: TIMEZONE },
+      start: { dateTime: normalizeNYDateTime(event.start), timeZone: TIMEZONE },
+      end: { dateTime: normalizeNYDateTime(event.end), timeZone: TIMEZONE },
     };
     const data = await calendarFetch('/calendars/primary/events', token, {
       method: 'POST',
@@ -123,8 +135,8 @@ export const calendarService = {
     const body: any = {};
     if (updates.summary) body.summary = updates.summary;
     if (updates.description) body.description = updates.description;
-    if (updates.start) body.start = { dateTime: formatNY(updates.start), timeZone: TIMEZONE };
-    if (updates.end) body.end = { dateTime: formatNY(updates.end), timeZone: TIMEZONE };
+    if (updates.start) body.start = { dateTime: normalizeNYDateTime(updates.start), timeZone: TIMEZONE };
+    if (updates.end) body.end = { dateTime: normalizeNYDateTime(updates.end), timeZone: TIMEZONE };
 
     const data = await calendarFetch(`/calendars/primary/events/${id}`, token, {
       method: 'PATCH',
@@ -166,7 +178,6 @@ export const calendarService = {
     const lists = await tasksFetch('/users/@me/lists', token);
     const defaultListId = lists.items?.[0]?.id;
     
-    // For tasks, we use the simple date string provided
     const body = {
       title: task.title,
       due: new Date(task.dueDate).toISOString(),

@@ -18,9 +18,9 @@ export interface CalendarTask {
 }
 
 export interface UIPayload {
-  type: 'duration' | 'confirm';
+  type: 'duration' | 'confirm' | 'pick';
   action?: string;
-  options?: number[];
+  options?: any[];
   pending: any;
   message?: string;
 }

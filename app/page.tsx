@@ -44,7 +44,6 @@ export default function ChronosApp() {
   const [isListening, setIsListening] = useState(false);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [activeTab, setActiveTab] = useState<'calendar' | 'tasks' | 'settings'>('calendar');
-  const [customDuration, setCustomDuration] = useState('');
 
   const brainRef = useRef<ChronosBrain | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -132,13 +131,17 @@ export default function ChronosApp() {
   const handleDurationSelection = (mins: number, pending: any) => {
     const start = new Date(pending.args.start);
     const end = addMinutes(start, mins).toISOString();
-    // We pass a very explicit final command to the model to avoid offset errors
     const newMsg = `Proceed with creating "${pending.args.summary}" starting at ${pending.args.start} and ending at ${end} (Duration: ${mins} minutes).`;
     handleSendMessage(newMsg);
   };
 
+  const handlePickEvent = (event: CalendarEvent, pending: any) => {
+    const newArgs = { ...pending.args, id: event.id, summary: event.summary };
+    const confirmationText = `Selected event "${event.summary}" (${event.id}). Proceed with ${pending.action}: ${JSON.stringify(newArgs)}`;
+    handleSendMessage(confirmationText, false, true);
+  };
+
   const handleConfirmedAction = (pending: any) => {
-    // Stringify the original request to remind the model exactly what was confirmed
     const confirmationText = `Executing ${pending.action}: ${JSON.stringify(pending.args)}`;
     handleSendMessage(confirmationText, false, true);
   };
@@ -218,7 +221,7 @@ export default function ChronosApp() {
         </div>
       </aside>
 
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-0">
         <header className="h-20 flex items-center justify-between px-8 bg-white border-b border-slate-200">
           <div className="flex items-center gap-6">
              <div className="flex items-center gap-2">
@@ -315,6 +318,19 @@ export default function ChronosApp() {
                     <div className="grid grid-cols-3 gap-2">
                       {m.ui.options?.map(mins => (
                         <button key={mins} onClick={() => handleDurationSelection(mins, m.ui?.pending)} className="py-2 text-xs font-bold border border-slate-100 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition-all">{mins}m</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {m.ui?.type === 'pick' && (
+                  <div className="mt-4 p-3 bg-white rounded-xl border border-indigo-100 space-y-2">
+                    <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest mb-2">Which Event?</p>
+                    <div className="space-y-1 max-h-48 overflow-y-auto custom-scrollbar">
+                      {m.ui.options?.map((ev: CalendarEvent) => (
+                        <button key={ev.id} onClick={() => handlePickEvent(ev, m.ui?.pending)} className="w-full text-left p-2 text-xs border border-slate-50 rounded-lg hover:bg-indigo-50 transition-all">
+                          <p className="font-bold text-slate-800 truncate">{ev.summary}</p>
+                          <p className="text-[10px] text-slate-400">{format(parseISO(ev.start), 'MMM d, h:mm a')}</p>
+                        </button>
                       ))}
                     </div>
                   </div>
