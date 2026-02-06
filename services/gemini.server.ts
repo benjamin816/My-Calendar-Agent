@@ -125,16 +125,21 @@ export async function processChatAction(message: string, history: any[], accessT
   4. EVENTS: You can create, list, edit, and delete events.
   5. IDS: If the user refers to "it" or "that task", look at previous tool outputs in history to find the correct ID.`;
 
+  // Map history roles to 'user' and 'model' as required by the SDK
+  const mappedHistory = history
+    .filter(h => h.role === 'user' || h.role === 'assistant')
+    .map(h => ({
+      role: h.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: h.content }]
+    }));
+
   const chat = ai.chats.create({
     model: "gemini-3-flash-preview",
     config: {
       systemInstruction,
       tools: [{ functionDeclarations: calendarTools }]
     },
-    history: history.map(h => ({
-      role: h.role === 'assistant' ? 'model' : h.role,
-      parts: [{ text: h.content }]
-    }))
+    history: mappedHistory
   });
 
   const prompt = confirmed ? `[SYSTEM: Confirmed execution] ${message}` : message;
@@ -167,7 +172,8 @@ export async function processChatAction(message: string, history: any[], accessT
       parts.push({ functionResponse: { name: call.name, response: asObject(result) } });
     }
 
-    const finalResponse = await chat.sendMessage({ message: { role: 'user', parts } });
+    // Pass the parts array directly to satisfy SendMessageParameters type
+    const finalResponse = await chat.sendMessage({ message: parts });
     let finalOutput = extractModelText(finalResponse);
 
     if (!finalOutput) {
