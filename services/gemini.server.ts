@@ -16,7 +16,7 @@ const calendarTools: FunctionDeclaration[] = [
   },
   {
     name: "clear_day",
-    description: "Delete all events on a specific day.",
+    description: "Delete all events on a specific day. Only events ENTIRELY within this day will be removed.",
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -41,7 +41,7 @@ const calendarTools: FunctionDeclaration[] = [
   },
   {
     name: "update_event",
-    description: "Modify an existing event. Provide 'id' if known.",
+    description: "Modify an existing event (extend, shorten, rename). Provide 'id' if known.",
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -118,9 +118,6 @@ function extractModelText(response: GenerateContentResponse): string {
   return parts.map(p => p.text || '').join('').trim();
 }
 
-/**
- * Verification utility to ensure mutations actually happened on Google Calendar/Tasks.
- */
 async function verifyAction(toolName: string, id: string | null, accessToken: string, date?: string): Promise<boolean> {
   try {
     switch (toolName) {
@@ -134,11 +131,19 @@ async function verifyAction(toolName: string, id: string | null, accessToken: st
         try {
           const all = await calendarService.getEvents(undefined, undefined, accessToken);
           return !all.find(e => e.id === id);
-        } catch { return true; } // If fetch fails specifically because id not found, it's deleted
+        } catch { return true; } 
       case "clear_day":
         if (!date) return false;
         const dayEvs = await calendarService.getEvents(`${date}T00:00:00Z`, `${date}T23:59:59Z`, accessToken);
-        return dayEvs.length === 0;
+        // During verification, clear_day is only "verified" if no events ENTIRELY in that day remain
+        const rangeStart = new Date(`${date}T00:00:00`);
+        const rangeEnd = new Date(`${date}T23:59:59`);
+        const remainingInDay = dayEvs.filter(ev => {
+          const s = new Date(ev.start);
+          const e = new Date(ev.end);
+          return s >= rangeStart && e <= rangeEnd;
+        });
+        return remainingInDay.length === 0;
       case "create_task":
       case "update_task":
         if (!id) return false;
@@ -161,13 +166,11 @@ export async function processChatAction(message: string, history: any[], accessT
   const apiKey = process.env.API_KEY;
   if (!apiKey) throw new Error("Missing API_KEY");
 
-  // --- FASTPATH FOR CONFIRMED ACTIONS ---
   if (confirmed && message.startsWith("Executing ")) {
     const match = message.match(/Executing (\w+): (.*)/);
     if (match) {
       const toolName = match[1];
       const args = JSON.parse(match[2]);
-      console.log(`[Mutation] Confirmed Execution: ${toolName}`, args);
       
       try {
         let result: any;
@@ -180,8 +183,18 @@ export async function processChatAction(message: string, history: any[], accessT
             break;
           case "clear_day":
             const dayEvents = await calendarService.getEvents(`${args.date}T00:00:00`, `${args.date}T23:59:59`, accessToken);
-            for (const ev of dayEvents) { await calendarService.deleteEvent(ev.id, accessToken); }
-            result = { count: dayEvents.length, date: args.date };
+            const rangeStart = new Date(`${args.date}T00:00:00`);
+            const rangeEnd = new Date(`${args.date}T23:59:59`);
+            
+            // Only delete events that fall ENTIRELY within the day
+            const eventsToDelete = dayEvents.filter(ev => {
+              const s = new Date(ev.start);
+              const e = new Date(ev.end);
+              return s >= rangeStart && e <= rangeEnd;
+            });
+
+            for (const ev of eventsToDelete) { await calendarService.deleteEvent(ev.id, accessToken); }
+            result = { count: eventsToDelete.length, date: args.date };
             break;
           case "create_event":
             result = await calendarService.createEvent(args, accessToken);
@@ -196,18 +209,15 @@ export async function processChatAction(message: string, history: any[], accessT
             throw new Error(`Tool ${toolName} not supported in confirmation path.`);
         }
 
-        // Verification
         const verified = await verifyAction(toolName, result?.id || args.id, accessToken, args.date);
-        if (!verified) throw new Error("Verification step failed: Resource not found or state unchanged after API call.");
+        if (!verified) throw new Error("Verification failed: State unchanged.");
 
-        console.log(`[Success] ${toolName} verified.`);
         if (toolName === "create_event" || toolName === "update_event") {
-          return { text: `Successfully ${toolName.replace('_','d')}: "${result.summary}" starting at ${result.start}.` };
+          return { text: `Success! I've updated your schedule. "${result.summary}" is set.` };
         }
-        return { text: `The ${toolName.replace('_', ' ')} has been successfully executed and verified.` };
+        return { text: `Action completed. Your schedule has been updated and verified.` };
       } catch (e: any) {
-        console.error(`[Failure] ${toolName}:`, e);
-        return { text: `Execution error: ${e.message}` };
+        return { text: `I encountered an issue while finalizing that: ${e.message}` };
       }
     }
   }
@@ -215,14 +225,15 @@ export async function processChatAction(message: string, history: any[], accessT
   const ai = new GoogleGenAI({ apiKey });
   const currentNYTime = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
 
-  const systemInstruction = `You are Chronos AI, an advanced, proactive calendar concierge.
-  CURRENT CONTEXT:
-  - Local Time: ${currentNYTime} (America/New_York)
-  - You MUST use tools for all calendar/task operations.
-  - For removals (deleting events/tasks or clearing a day), ALWAYS prepare the action and let the UI handle confirmation.
-  - If a user wants to update/delete but you don't have the ID, call list_events first.
-  - NEVER pretend to have done an action without a successful tool result.
-  - If a tool fails, inform the user about the error.`;
+  const systemInstruction = `You are Chronos AI.
+  RULES:
+  - Local Time: ${currentNYTime} (America/New_York).
+  - DELETIONS/CLEARING: You MUST provide a textual summary of EXACTLY which events are being affected before presenting the confirmation UI.
+  - CLEAR_DAY: This only deletes events that START and END on that specific day. Multi-day events spanning across the day are PRESERVED. Mention this to the user.
+  - MODIFICATIONS: If a user asks to "extend my meeting through Friday" or "end it on Monday", use update_event with the calculated new ISO timestamps.
+  - VERBAL CONFIRMATION: In your response text, explicitly name the events being modified or deleted. 
+  Example: "I've prepared to delete your 'Doctor Appointment'. Should I proceed?"
+  Example: "I'm clearing today. This will remove 'Gym' and 'Lunch', but I'll keep your multi-day 'Ski Trip'. Confirm?"`;
 
   const mappedHistory = history
     .filter(h => h.role === 'user' || h.role === 'assistant')
@@ -248,25 +259,64 @@ export async function processChatAction(message: string, history: any[], accessT
   while (response.functionCalls && response.functionCalls.length > 0 && toolRounds < maxRounds) {
     const parts: Part[] = [];
     for (const call of response.functionCalls) {
-      console.log(`[Tool Call] ${call.name}`, call.args);
+      
+      // UI Interceptor for Deletions
+      if (call.name === "clear_day") {
+        const evs = await calendarService.getEvents(`${call.args.date}T00:00:00`, `${call.args.date}T23:59:59`, accessToken);
+        const rangeS = new Date(`${call.args.date}T00:00:00`);
+        const rangeE = new Date(`${call.args.date}T23:59:59`);
+        const targets = evs.filter(ev => new Date(ev.start) >= rangeS && new Date(ev.end) <= rangeE);
+        const multiDayCount = evs.length - targets.length;
+        
+        const names = targets.map(t => `"${t.summary}"`).join(", ");
+        const text = targets.length > 0 
+          ? `I've prepared to clear your day. This will remove: ${names}. ${multiDayCount > 0 ? `I'm preserving ${multiDayCount} multi-day event(s) as they aren't contained entirely within this date.` : ''} Shall I proceed?`
+          : `I didn't find any single-day events to clear on ${call.args.date}${multiDayCount > 0 ? `, but I am keeping your ${multiDayCount} multi-day event(s) safe.` : '.'}`;
 
-      // Sensitive UI Interceptors (Deletions/Clears)
-      if (call.name === "clear_day" || call.name === "delete_event" || call.name === "delete_task") {
         return {
-          text: `I've prepared the ${call.name.replace('_', ' ')} action. Please confirm to proceed.`,
+          text,
+          ui: targets.length > 0 ? {
+            type: "confirm",
+            action: "clear_day",
+            pending: { action: "clear_day", args: call.args }
+          } : undefined
+        };
+      }
+
+      if (call.name === "delete_event") {
+        // Find title for verbal confirmation
+        const allEvs = await calendarService.getEvents(undefined, undefined, accessToken);
+        const target = allEvs.find(e => e.id === call.args.id);
+        const title = target ? `"${target.summary}"` : "this event";
+        return {
+          text: `I've prepared to delete ${title}. Confirm to remove it from your calendar?`,
           ui: {
             type: "confirm",
-            action: call.name,
-            pending: { action: call.name, args: call.args }
+            action: "delete_event",
+            pending: { action: "delete_event", args: call.args }
           }
         };
       }
 
-      // Logic for discovering events if ID is missing for an update
+      if (call.name === "delete_task") {
+        const allTasks = await calendarService.getTasks(accessToken);
+        const target = allTasks.find(t => t.id === call.args.id);
+        const title = target ? `"${target.title}"` : "this task";
+        return {
+          text: `I've prepared to delete ${title}. Should I remove it?`,
+          ui: {
+            type: "confirm",
+            action: "delete_task",
+            pending: { action: "delete_task", args: call.args }
+          }
+        };
+      }
+
+      // Handle discovery for updates if ID missing
       if (call.name === "update_event" && !call.args.id) {
         const events = await calendarService.getEvents(undefined, undefined, accessToken);
         return {
-          text: "I found multiple events. Which one should I update?",
+          text: "I found multiple events. Which one should I modify?",
           ui: {
             type: "pick",
             options: events.slice(0, 8),
@@ -275,43 +325,24 @@ export async function processChatAction(message: string, history: any[], accessT
         };
       }
 
-      // Execute standard tools
       let result: any;
       try {
         switch (call.name) {
-          case "list_events": 
-            result = await calendarService.getEvents(call.args.timeMin as string, call.args.timeMax as string, accessToken); 
-            break;
-          case "create_event": 
-            result = await calendarService.createEvent(call.args as any, accessToken); 
-            break;
-          case "update_event":
-            result = await calendarService.updateEvent(call.args.id as string, call.args as any, accessToken);
-            break;
-          case "list_tasks": 
-            result = await calendarService.getTasks(accessToken); 
-            break;
-          case "create_task": 
-            result = await calendarService.createTask(call.args as any, accessToken); 
-            break;
-          case "update_task": 
-            result = await calendarService.updateTask(call.args.id as string, call.args as any, accessToken); 
-            break;
-          default: 
-            console.error(`[Error] Unknown tool: ${call.name}`);
-            return { text: `Execution error: Tool not implemented: ${call.name}` };
+          case "list_events": result = await calendarService.getEvents(call.args.timeMin as string, call.args.timeMax as string, accessToken); break;
+          case "create_event": result = await calendarService.createEvent(call.args as any, accessToken); break;
+          case "update_event": result = await calendarService.updateEvent(call.args.id as string, call.args as any, accessToken); break;
+          case "list_tasks": result = await calendarService.getTasks(accessToken); break;
+          case "create_task": result = await calendarService.createTask(call.args as any, accessToken); break;
+          case "update_task": result = await calendarService.updateTask(call.args.id as string, call.args as any, accessToken); break;
+          default: throw new Error(`Tool not implemented: ${call.name}`);
         }
 
-        // Verify mutations in the loop (create/update)
         if (["create_event", "update_event", "create_task", "update_task"].includes(call.name)) {
           const isVerified = await verifyAction(call.name, result.id, accessToken);
-          if (!isVerified) throw new Error(`Mutation ${call.name} reported success but verification failed.`);
-          console.log(`[Verified] ${call.name} ID: ${result.id}`);
+          if (!isVerified) throw new Error(`Mutation reported success but verification failed.`);
         }
-
       } catch (e: any) {
-        console.error(`[Tool Error] ${call.name}:`, e.message);
-        return { text: `Execution error: ${e.message}` };
+        return { text: `I ran into a problem: ${e.message}` };
       }
 
       parts.push({ functionResponse: { name: call.name, response: wrapToolResult(result) } });
@@ -321,7 +352,7 @@ export async function processChatAction(message: string, history: any[], accessT
     toolRounds++;
   }
 
-  return { text: extractModelText(response) || "I've processed your request." };
+  return { text: extractModelText(response) || "I've finished updating your schedule." };
 }
 
 export async function processTTSAction(text: string) {
