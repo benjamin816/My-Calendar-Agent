@@ -24,7 +24,8 @@ import {
   PaperAirplaneIcon,
   ArrowLeftOnRectangleIcon,
   XMarkIcon,
-  ClockIcon
+  ClockIcon,
+  TrashIcon
 } from '@heroicons/react/24/outline';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -130,7 +131,7 @@ export default function ChronosApp() {
 
   const handleDurationSelection = (mins: number, pending: any) => {
     const end = addMinutes(new Date(pending.args.start), mins).toISOString();
-    const newMsg = `Create event "${pending.args.summary}" from ${pending.args.start} to ${end}`;
+    const newMsg = `Finalize event "${pending.args.summary}" with duration of ${mins} minutes (ending at ${end})`;
     handleSendMessage(newMsg);
   };
 
@@ -315,11 +316,14 @@ export default function ChronosApp() {
                   </div>
                 )}
                 {m.ui?.type === 'confirm' && (
-                  <div className="mt-4 p-3 bg-white rounded-xl border border-amber-100 space-y-3">
-                    <p className="text-xs font-bold text-amber-600">{m.ui.message}</p>
+                  <div className={cn("mt-4 p-4 rounded-xl border shadow-sm space-y-3", m.ui.action === 'delete_event' ? 'bg-red-50 border-red-100' : 'bg-white border-amber-100')}>
+                    <div className="flex items-center gap-2">
+                      {m.ui.action === 'delete_event' ? <TrashIcon className="w-4 h-4 text-red-600" /> : <ClockIcon className="w-4 h-4 text-amber-600" />}
+                      <p className={cn("text-xs font-bold", m.ui.action === 'delete_event' ? 'text-red-700' : 'text-amber-700')}>{m.ui.message}</p>
+                    </div>
                     <div className="flex gap-2">
-                      <button onClick={() => handleSendMessage(m.ui?.pending.args.summary || "Proceed", false, true)} className="flex-1 bg-blue-600 text-white py-2 rounded-lg text-xs font-bold">Confirm</button>
-                      <button onClick={() => setMessages(prev => prev.filter(msg => msg.id !== m.id))} className="flex-1 bg-slate-100 text-slate-600 py-2 rounded-lg text-xs font-bold">Cancel</button>
+                      <button onClick={() => handleSendMessage(m.ui?.pending.args.summary || "Proceed with action", false, true)} className={cn("flex-1 py-2 rounded-lg text-xs font-bold text-white transition-all shadow-sm active:scale-95", m.ui.action === 'delete_event' ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700')}>Confirm</button>
+                      <button onClick={() => setMessages(prev => prev.filter(msg => msg.id !== m.id))} className="flex-1 bg-slate-100 text-slate-600 py-2 rounded-lg text-xs font-bold hover:bg-slate-200">Cancel</button>
                     </div>
                   </div>
                 )}

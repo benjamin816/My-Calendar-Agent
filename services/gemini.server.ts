@@ -5,7 +5,7 @@ import { calendarService } from "./calendar";
 const calendarTools: FunctionDeclaration[] = [
   {
     name: "list_events",
-    description: "Get a list of calendar events for a specific time range.",
+    description: "Search/list events for a specific time range. Use this to find IDs before updating or deleting.",
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -22,7 +22,7 @@ const calendarTools: FunctionDeclaration[] = [
       properties: {
         summary: { type: Type.STRING, description: "The title of the event" },
         start: { type: Type.STRING, description: "ISO date string for start time" },
-        end: { type: Type.STRING, description: "ISO date string for end time. If missing or same as start, it will trigger a duration prompt." },
+        end: { type: Type.STRING, description: "ISO date string for end time." },
         description: { type: Type.STRING, description: "Details about the event" }
       },
       required: ["summary", "start"]
@@ -30,26 +30,26 @@ const calendarTools: FunctionDeclaration[] = [
   },
   {
     name: "update_event",
-    description: "Update an existing calendar event (including moving it).",
+    description: "Update an existing calendar event (reschedule, rename, or change details).",
     parameters: {
       type: Type.OBJECT,
       properties: {
-        id: { type: Type.STRING, description: "Unique ID of the event to update" },
-        summary: { type: Type.STRING },
-        start: { type: Type.STRING },
-        end: { type: Type.STRING },
-        description: { type: Type.STRING }
+        id: { type: Type.STRING, description: "Unique ID of the event to update (Mandatory)" },
+        summary: { type: Type.STRING, description: "New title" },
+        start: { type: Type.STRING, description: "New start time" },
+        end: { type: Type.STRING, description: "New end time" },
+        description: { type: Type.STRING, description: "New description" }
       },
       required: ["id"]
     }
   },
   {
     name: "delete_event",
-    description: "Remove an event from the calendar.",
+    description: "Permanently remove an event from the calendar.",
     parameters: {
       type: Type.OBJECT,
       properties: {
-        id: { type: Type.STRING, description: "Unique ID of the event to remove" }
+        id: { type: Type.STRING, description: "Unique ID of the event to remove (Mandatory)" }
       },
       required: ["id"]
     }
@@ -60,19 +60,19 @@ const calendarTools: FunctionDeclaration[] = [
   },
   {
     name: "create_task",
-    description: "Add a new task to the task list. Requires a date.",
+    description: "Add a new task. Requires a date.",
     parameters: {
       type: Type.OBJECT,
       properties: {
         title: { type: Type.STRING, description: "Title of the task" },
-        dueDate: { type: Type.STRING, description: "Mandatory due date (YYYY-MM-DD format)" }
+        dueDate: { type: Type.STRING, description: "Due date (YYYY-MM-DD)" }
       },
       required: ["title", "dueDate"]
     }
   },
   {
     name: "mark_task_completed",
-    description: "Mark a task as completed or incomplete.",
+    description: "Complete or uncomplete a task.",
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -93,14 +93,15 @@ export async function processChatAction(message: string, history: any[], accessT
     model: "gemini-3-flash-preview",
     config: {
       systemInstruction: `You are Chronos, a calendar agent.
-      Timezone: America/New_York. 
+      Timezone: America/New_York (All user times are in this timezone).
       Current Time: ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })}.
       
-      RULES:
-      1. When creating an event, if the user doesn't specify an end time or duration, provide the start time to the 'create_event' tool. The system will handle the prompt.
-      2. When moving or updating an event's time, the system will intercept and ask for confirmation.
-      3. Tasks MUST have a dueDate (YYYY-MM-DD). If not provided, ask the user. Ignore task times, only use dates.
-      4. Always use Markdown for responses.`,
+      BEHAVIOR RULES:
+      1. RESCHEDULING/ALTERING: Always search for events first using 'list_events' to find the correct 'id'. Then use 'update_event'.
+      2. DELETING: Always search for the event first to get the 'id'. Use 'delete_event' for removals.
+      3. DURATION: If a user creates an event without an end time, the system will prompt them via UI.
+      4. CONFIRMATION: The system intercepts updates and deletions for confirmation. 
+      5. FORMAT: Use Markdown for all text responses. Mention events clearly.`,
       tools: [{ functionDeclarations: calendarTools }]
     },
     history: history
@@ -112,37 +113,49 @@ export async function processChatAction(message: string, history: any[], accessT
     const firstCall = response.functionCalls[0];
 
     // Intercept Create Event for Duration
-    if (firstCall.name === "create_event") {
+    if (firstCall.name === "create_event" && !confirmed) {
       const args = firstCall.args as any;
       if (!args.end || args.end === args.start) {
         return {
-          text: "How long should this event be?",
+          text: "I need an end time for that event. How long should it be?",
           ui: {
             type: 'duration',
-            options: [15, 30, 45, 60, 120, 180],
+            options: [15, 30, 45, 60, 90, 120],
             pending: { action: 'create_event', args: args }
           }
         };
       }
     }
 
-    // Intercept Move/Update Event for Confirmation (unless already confirmed)
+    // Intercept Update for Confirmation
     if (firstCall.name === "update_event" && !confirmed) {
       const args = firstCall.args as any;
-      if (args.start || args.end) {
-        return {
-          text: `I'm ready to update that event. Should I proceed?`,
-          ui: {
-            type: 'confirm',
-            action: 'update_event',
-            pending: { action: 'update_event', args: args },
-            message: `Update event "${args.summary || 'selected event'}" to ${args.start ? new Date(args.start).toLocaleString() : 'new time'}?`
-          }
-        };
-      }
+      return {
+        text: `I've found the event. Ready to apply those changes?`,
+        ui: {
+          type: 'confirm',
+          action: 'update_event',
+          pending: { action: 'update_event', args: args },
+          message: `Update event ${args.summary ? `to "${args.summary}"` : ''} ${args.start ? `at ${new Date(args.start).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}` : ''}?`
+        }
+      };
     }
 
-    // Process Tools
+    // Intercept Delete for Confirmation
+    if (firstCall.name === "delete_event" && !confirmed) {
+      const args = firstCall.args as any;
+      return {
+        text: "Are you sure you want to remove this event?",
+        ui: {
+          type: 'confirm',
+          action: 'delete_event',
+          pending: { action: 'delete_event', args: args },
+          message: `Permanently delete the selected event?`
+        }
+      };
+    }
+
+    // Execute Tools
     const functionResponseParts: Part[] = [];
     for (const call of response.functionCalls) {
       let apiResult: any;
@@ -159,7 +172,7 @@ export async function processChatAction(message: string, history: any[], accessT
             break;
           case "delete_event":
             await calendarService.deleteEvent(call.args.id as string, accessToken);
-            apiResult = { status: "deleted" };
+            apiResult = { status: "deleted successfully" };
             break;
           case "list_tasks":
             apiResult = await calendarService.getTasks(accessToken);

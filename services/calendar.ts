@@ -11,16 +11,15 @@ export const setCalendarToken = (token: string) => {
   accessToken = token;
 };
 
-// Helper to ensure dates are RFC3339 with New York Offset
-function formatNY(date: Date | string, endOfDay: boolean = false): string {
+/**
+ * Normalizes a date string or object to a local New York time string (RFC3339 without offset)
+ * used in conjunction with the timeZone parameter in Google Calendar API.
+ */
+function formatNY(date: Date | string): string {
   const d = new Date(date);
-  if (endOfDay) {
-    d.setHours(23, 59, 59, 999);
-  }
-  // We use Intl to get current offset in NY for the given date to be accurate with DST
-  const nyDateStr = d.toLocaleString('en-US', { timeZone: TIMEZONE, hour12: false });
-  // This is a simple way to get an ISO-like string that Google accepts with timezone
-  return d.toISOString(); 
+  // sv-SE locale provides "YYYY-MM-DD HH:mm:ss"
+  const localString = d.toLocaleString('sv-SE', { timeZone: TIMEZONE });
+  return localString.replace(' ', 'T');
 }
 
 async function calendarFetch(path: string, token: string | null, options: RequestInit = {}) {
@@ -70,8 +69,8 @@ async function tasksFetch(path: string, token: string | null, options: RequestIn
 export const calendarService = {
   getEvents: async (timeMin?: string, timeMax?: string, token: string | null = null): Promise<CalendarEvent[]> => {
     const params = new URLSearchParams({
-      timeMin: timeMin || new Date(new Date().setMonth(new Date().getMonth() - 1)).toISOString(),
-      timeMax: timeMax || new Date(new Date().setMonth(new Date().getMonth() + 1)).toISOString(),
+      timeMin: timeMin || new Date(new Date().setMonth(new Date().getMonth() - 2)).toISOString(),
+      timeMax: timeMax || new Date(new Date().setMonth(new Date().getMonth() + 2)).toISOString(),
       singleEvents: 'true',
       orderBy: 'startTime',
       timeZone: TIMEZONE,
@@ -92,8 +91,8 @@ export const calendarService = {
     const body = {
       summary: event.summary,
       description: event.description,
-      start: { dateTime: new Date(event.start).toISOString(), timeZone: TIMEZONE },
-      end: { dateTime: new Date(event.end).toISOString(), timeZone: TIMEZONE },
+      start: { dateTime: formatNY(event.start), timeZone: TIMEZONE },
+      end: { dateTime: formatNY(event.end), timeZone: TIMEZONE },
     };
     const data = await calendarFetch('/calendars/primary/events', token, {
       method: 'POST',
@@ -111,8 +110,8 @@ export const calendarService = {
     const body: any = {};
     if (updates.summary) body.summary = updates.summary;
     if (updates.description) body.description = updates.description;
-    if (updates.start) body.start = { dateTime: new Date(updates.start).toISOString(), timeZone: TIMEZONE };
-    if (updates.end) body.end = { dateTime: new Date(updates.end).toISOString(), timeZone: TIMEZONE };
+    if (updates.start) body.start = { dateTime: formatNY(updates.start), timeZone: TIMEZONE };
+    if (updates.end) body.end = { dateTime: formatNY(updates.end), timeZone: TIMEZONE };
 
     const data = await calendarFetch(`/calendars/primary/events/${id}`, token, {
       method: 'PATCH',
@@ -154,13 +153,11 @@ export const calendarService = {
     const lists = await tasksFetch('/users/@me/lists', token);
     const defaultListId = lists.items?.[0]?.id;
     
-    // Format due date to RFC3339 end-of-day in NY
-    const dueTime = new Date(task.dueDate);
-    dueTime.setHours(23, 59, 59, 0);
-
+    // Tasks are date-only usually, so we set to NY midnight or end of day
+    const d = new Date(task.dueDate);
     const body = {
       title: task.title,
-      due: dueTime.toISOString(),
+      due: d.toISOString(), // Tasks API handles UTC dates fine for due dates
       notes: task.notes,
     };
     const data = await tasksFetch(`/lists/${defaultListId}/tasks`, token, {
