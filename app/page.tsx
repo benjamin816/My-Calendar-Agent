@@ -509,7 +509,13 @@ function ChatInterface({
 
       <div className="p-4 lg:p-8 border-t border-slate-100 bg-white flex-shrink-0">
         <div className="relative group">
-          <input value={inputText} onChange={e => setInputText(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSendMessage()} placeholder="Tell Chronos what's next..." className="w-full bg-slate-50 border-none rounded-2xl lg:rounded-[1.75rem] pl-4 lg:pl-7 pr-20 lg:pr-24 py-4 lg:py-5 text-sm font-semibold focus:ring-2 lg:focus:ring-4 focus:ring-blue-100 transition-all placeholder:text-slate-300" />
+          <input 
+            value={inputText} 
+            onChange={e => setInputText(e.target.value)} 
+            onKeyDown={e => e.key === 'Enter' && handleSendMessage()} 
+            placeholder="Tell Chronos what's next..." 
+            className="w-full bg-slate-50 border-none rounded-2xl lg:rounded-[1.75rem] pl-4 lg:pl-7 pr-20 lg:pr-24 py-4 lg:py-5 text-base font-semibold focus:ring-2 lg:focus:ring-4 focus:ring-blue-100 transition-all placeholder:text-slate-300" 
+          />
           <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1">
             <button onClick={toggleListening} className={cn("p-2 rounded-xl transition-all", isListening ? 'bg-red-500 text-white shadow-lg' : 'text-slate-400 hover:text-slate-900')}>
               {isListening ? <StopIcon className="w-5 h-5 lg:w-6 lg:h-6" /> : <MicrophoneIcon className="w-5 h-5 lg:w-6 lg:h-6" />}
