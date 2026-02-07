@@ -1,6 +1,6 @@
 {
   "name": "Chronos AI - Smart Calendar Assistant",
-  "description": "An intelligent calendar agent that manages your schedule, tasks, and appointments through natural conversation and voice interaction.",
+  "description": "An intelligent calendar agent that manages your schedule, tasks, and appointments. Supports direct Siri voice commands via URL parameters.",
   "requestFramePermissions": [
     "microphone",
     "geolocation"

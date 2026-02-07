@@ -1,11 +1,19 @@
+
 export class ChronosBrain {
-  async processMessage(message: string, onUpdate: () => void, accessToken: string, history: any[] = [], confirmed: boolean = false) {
+  async processMessage(
+    message: string, 
+    onUpdate: () => void, 
+    accessToken: string, 
+    history: any[] = [], 
+    confirmed: boolean = false,
+    source: 'web' | 'siri' = 'web'
+  ) {
     const response = await fetch('/api/gemini', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         action: 'chat',
-        payload: { message, accessToken, confirmed, history }
+        payload: { message, accessToken, confirmed, history, source }
       })
     });
 

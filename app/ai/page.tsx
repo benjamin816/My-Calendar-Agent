@@ -2,7 +2,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react';
-import { useSession, signIn, signOut } from "next-auth/react";
+import { useSession, signOut } from "next-auth/react";
 import { useSearchParams, useRouter } from 'next/navigation';
 import { CalendarEvent, CalendarTask, ChatMessage } from '../../types';
 import { calendarService, setCalendarToken } from '../../services/calendar';
@@ -56,7 +56,7 @@ function ChronosAppContent() {
   const brainRef = useRef<ChronosBrain | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
-  const hasHandledParam = useRef(false);
+  const siriHandledRef = useRef(false);
 
   const isToday = isSameDay(currentDate, new Date());
 
@@ -115,12 +115,17 @@ function ChronosAppContent() {
   useEffect(() => { if (status === 'authenticated') refreshData(); }, [status, refreshData]);
 
   // Message Handling
-  const handleSendMessage = useCallback(async (text?: string, voice: boolean = false, confirmed: boolean = false, clearHistory: boolean = false) => {
+  const handleSendMessage = useCallback(async (
+    text?: string, 
+    voice: boolean = false, 
+    confirmed: boolean = false, 
+    clearHistory: boolean = false,
+    source: 'web' | 'siri' = 'web'
+  ) => {
     const msg = text || inputText;
     if (!msg.trim() && !confirmed) return;
 
     if (clearHistory) {
-      // CLEAR CHAT: Reset messages to just the current user input
       setMessages([{ id: Date.now().toString(), role: 'user', content: msg, timestamp: new Date() }]);
     } else if (!confirmed) {
       setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', content: msg, timestamp: new Date() }]);
@@ -130,9 +135,15 @@ function ChronosAppContent() {
     setIsProcessing(true);
 
     try {
-      // Use an empty history array if clearHistory is true to force a fresh brain context
       const currentHistory = clearHistory ? [] : messages;
-      const result = await brainRef.current?.processMessage(msg, refreshData, session?.accessToken as string, currentHistory, confirmed);
+      const result = await brainRef.current?.processMessage(
+        msg, 
+        refreshData, 
+        session?.accessToken as string, 
+        currentHistory, 
+        confirmed,
+        source
+      );
       
       if (result) {
         const assistantMsg: ChatMessage = { id: (Date.now() + 1).toString(), role: 'assistant', content: result.text, timestamp: new Date(), ui: result.ui };
@@ -150,18 +161,22 @@ function ChronosAppContent() {
     }
   }, [inputText, messages, session, refreshData]);
 
-  // Siri/URL Parameter Handoff Logic
+  // NEW Siri URL PARAM Logic: Stateless & Direct
   useEffect(() => {
-    if (status !== 'authenticated' || hasHandledParam.current) return;
+    if (status !== 'authenticated' || siriHandledRef.current) return;
 
     const textParam = searchParams.get('text');
     if (textParam) {
-      hasHandledParam.current = true;
+      siriHandledRef.current = true; // Guard to run once
       setActiveTab('chat');
-      // Execute dictated command: clear old chat, auto-send, and trigger voice response
-      handleSendMessage(textParam, true, false, true);
-      // Clean up the URL to prevent re-execution on refresh
-      router.replace('/ai');
+      
+      // Auto-run the command from Siri: clear history, trigger voice response, use 'siri' source
+      handleSendMessage(textParam, true, false, true, 'siri');
+      
+      // Clean URL to prevent re-execution on refresh
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete('text');
+      router.replace(`/ai?${params.toString()}`);
     }
   }, [status, searchParams, router, handleSendMessage]);
 
@@ -253,10 +268,12 @@ function ChronosAppContent() {
                 ) : (
                   <div className="w-10 lg:w-12 h-10 lg:h-12" />
                 )}
+                
                 <div className="text-center">
                   <p className="text-2xl lg:text-4xl font-black text-slate-900 tracking-tighter">{format(currentDate, 'd')}</p>
                   <p className={cn("text-[8px] lg:text-[10px] font-black uppercase tracking-[0.3em]", isToday ? "text-blue-600" : "text-slate-400")}>{format(currentDate, 'EEEE')}</p>
                 </div>
+                
                 <button onClick={() => setCurrentDate(d => addDays(d, 1))} className="p-2 lg:p-3 hover:bg-slate-50 rounded-2xl border border-slate-100 transition-all">
                   <ChevronRightIcon className="w-5 h-5 lg:w-6 lg:h-6" />
                 </button>
