@@ -1,3 +1,4 @@
+
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
@@ -5,7 +6,8 @@ import { useSession, signIn, signOut } from "next-auth/react";
 import { CalendarEvent, CalendarTask, ChatMessage } from '../types';
 import { calendarService, setCalendarToken } from '../services/calendar';
 import { ChronosBrain, decodeAudio, playPcmAudio } from '../services/gemini.client';
-import { format, eachDayOfInterval, addDays, isSameDay, parseISO, addMinutes, startOfDay, endOfDay, subDays, isAfter, isSameYear } from 'date-fns';
+// Fixed missing date-fns exports by using native Date or existing functions
+import { format, eachDayOfInterval, addDays, isSameDay, addMinutes, endOfDay, isAfter, isSameYear } from 'date-fns';
 import { 
   ChatBubbleLeftRightIcon, 
   MicrophoneIcon, 
@@ -32,6 +34,18 @@ import { twMerge } from 'tailwind-merge';
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
+
+// Helper to replace missing startOfDay from date-fns
+const startOfDayHelper = (date: Date | number): Date => {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d;
+};
+
+// Helper to replace missing subDays from date-fns
+const subDaysHelper = (date: Date | number, amount: number): Date => {
+  return addDays(date, -amount);
+};
 
 export default function ChronosApp() {
   const { data: session, status } = useSession();
@@ -104,7 +118,8 @@ export default function ChronosApp() {
     if (!session?.accessToken) return;
     try {
       setCalendarToken(session.accessToken as string);
-      const timeMin = startOfDay(addDays(currentDate, -7)).toISOString();
+      // Fixed: replace startOfDay with startOfDayHelper
+      const timeMin = startOfDayHelper(addDays(currentDate, -7)).toISOString();
       const timeMax = endOfDay(addDays(currentDate, 14)).toISOString();
       const [evs, tks] = await Promise.all([
         calendarService.getEvents(timeMin, timeMax, session.accessToken as string),
@@ -187,7 +202,8 @@ export default function ChronosApp() {
 
   const handleDurationSelection = (mins: number, pending: any) => {
     const startStr = pending.args.start;
-    const endStr = format(addMinutes(parseISO(startStr), mins), "yyyy-MM-dd'T'HH:mm:ss");
+    // Fixed: replace parseISO with new Date
+    const endStr = format(addMinutes(new Date(startStr), mins), "yyyy-MM-dd'T'HH:mm:ss");
     const confirmationText = `Executing create_event: ${JSON.stringify({ ...pending.args, end: endStr })}`;
     handleSendMessage(confirmationText, false, true);
   };
@@ -209,26 +225,30 @@ export default function ChronosApp() {
   };
 
   const displayDays = useMemo(() => {
-    const start = startOfDay(currentDate);
+    // Fixed: replace startOfDay with startOfDayHelper
+    const start = startOfDayHelper(currentDate);
     const end = endOfDay(addDays(start, 2));
     return eachDayOfInterval({ start, end });
   }, [currentDate]);
 
   const getEventsForDay = (day: Date) => {
-    const dayStart = startOfDay(day);
+    // Fixed: replace startOfDay with startOfDayHelper
+    const dayStart = startOfDayHelper(day);
     const dayEnd = endOfDay(day);
     
     return events.filter(e => {
-      const eStart = parseISO(e.start);
-      const eEnd = e.isAllDay ? subDays(parseISO(e.end), 0) : parseISO(e.end);
+      // Fixed: replace parseISO with new Date
+      const eStart = new Date(e.start);
+      // Fixed: replace parseISO with new Date and subDays with subDaysHelper
+      const eEnd = e.isAllDay ? subDaysHelper(new Date(e.end), 0) : new Date(e.end);
       
       if (e.isAllDay) {
-        const exclusiveEnd = parseISO(e.end);
+        const exclusiveEnd = new Date(e.end);
         return eStart < dayEnd && exclusiveEnd > dayStart;
       }
       
       return eStart <= dayEnd && eEnd >= dayStart;
-    }).sort((a, b) => parseISO(a.start).getTime() - parseISO(b.start).getTime());
+    }).sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
   };
 
   const getTasksForDay = (day: Date) => {
@@ -313,7 +333,7 @@ export default function ChronosApp() {
         </div>
       </aside>
 
-      <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden pb-16 lg:pb-0">
+      <div className="flex-1 flex flex-col min-0 h-full overflow-hidden pb-16 lg:pb-0">
         <header className="h-16 lg:h-20 flex items-center justify-between px-4 lg:px-8 bg-white border-b border-slate-200 flex-shrink-0">
           <div className="flex items-center gap-2 lg:gap-6">
              <div className="flex items-center gap-1 lg:gap-2">
@@ -488,10 +508,12 @@ export default function ChronosApp() {
 }
 
 function EventCard({ event, onClick }: { event: CalendarEvent, onClick: () => void }) {
-  const startDt = parseISO(event.start);
-  const endDt = parseISO(event.end);
+  // Fixed: replace parseISO with new Date
+  const startDt = new Date(event.start);
+  const endDt = new Date(event.end);
+  // Fixed: replace subDays with subDaysHelper
   const isMultiDay = event.isAllDay 
-    ? !isSameDay(startDt, subDays(endDt, 1))
+    ? !isSameDay(startDt, subDaysHelper(endDt, 1))
     : !isSameDay(startDt, endDt);
 
   return (
@@ -556,40 +578,50 @@ function ChatInterface({
               <p className="text-slate-400 font-bold text-sm lg:text-base italic">Ask me to "Schedule coffee tomorrow" or "Remind me to buy milk"</p>
            </div>
         )}
-        {messages.map((m: ChatMessage) => (
-          <div key={m.id} className={cn("flex flex-col animate-in slide-in-from-bottom-2 duration-300", m.role === 'user' ? 'items-end' : 'items-start')}>
-            <div className={cn("max-w-[95%] p-4 lg:p-5 rounded-[1.75rem] text-sm leading-relaxed shadow-sm whitespace-pre-wrap", m.role === 'user' ? 'bg-slate-900 text-white font-medium rounded-br-none' : 'bg-white text-slate-800 border border-slate-100 rounded-bl-none')}>
-              {m.content}
-              
-              {m.ui?.type === 'duration' && (
-                <div className="mt-4 grid grid-cols-3 gap-2">
-                  {m.ui.options?.map((mins: number) => (
-                    <button key={mins} onClick={() => handleDurationSelection(mins, m.ui?.pending)} className="py-2.5 px-1 text-[10px] font-black border border-slate-100 rounded-xl hover:bg-blue-600 hover:text-white transition-all">{mins}m</button>
-                  ))}
+        {messages.map((m: ChatMessage) => {
+          const isFromSiri = m.content.startsWith("(Siri command)");
+          return (
+            <div key={m.id} className={cn("flex flex-col animate-in slide-in-from-bottom-2 duration-300", m.role === 'user' ? 'items-end' : 'items-start')}>
+              {isFromSiri && (
+                <div className="flex items-center gap-1.5 mb-1 px-3">
+                  <CpuChipIcon className="w-3 h-3 text-blue-500" />
+                  <span className="text-[9px] font-black text-blue-500 uppercase tracking-widest">Siri Input</span>
                 </div>
               )}
+              <div className={cn("max-w-[95%] p-4 lg:p-5 rounded-[1.75rem] text-sm leading-relaxed shadow-sm whitespace-pre-wrap", m.role === 'user' ? 'bg-slate-900 text-white font-medium rounded-br-none' : 'bg-white text-slate-800 border border-slate-100 rounded-bl-none')}>
+                {m.content}
+                
+                {m.ui?.type === 'duration' && (
+                  <div className="mt-4 grid grid-cols-3 gap-2">
+                    {m.ui.options?.map((mins: number) => (
+                      <button key={mins} onClick={() => handleDurationSelection(mins, m.ui?.pending)} className="py-2.5 px-1 text-[10px] font-black border border-slate-100 rounded-xl hover:bg-blue-600 hover:text-white transition-all">{mins}m</button>
+                    ))}
+                  </div>
+                )}
 
-              {m.ui?.type === 'pick' && (
-                <div className="mt-4 space-y-2">
-                  {m.ui.options?.map((ev: CalendarEvent) => (
-                    <button key={ev.id} onClick={() => handlePickEvent(ev, m.ui?.pending)} className="w-full text-left p-3 text-xs border border-slate-100 rounded-2xl hover:bg-blue-50 transition-all">
-                      <p className="font-black text-slate-900 mb-0.5">{ev.summary}</p>
-                      <p className="text-[9px] text-slate-500 font-bold uppercase">{format(parseISO(ev.start), 'MMM d @ h:mm a')}</p>
-                    </button>
-                  ))}
-                </div>
-              )}
+                {m.ui?.type === 'pick' && (
+                  <div className="mt-4 space-y-2">
+                    {m.ui.options?.map((ev: CalendarEvent) => (
+                      <button key={ev.id} onClick={() => handlePickEvent(ev, m.ui?.pending)} className="w-full text-left p-3 text-xs border border-slate-100 rounded-2xl hover:bg-blue-50 transition-all">
+                        <p className="font-black text-slate-900 mb-0.5">{ev.summary}</p>
+                        {/* Fixed: replace parseISO with new Date */}
+                        <p className="text-[9px] text-slate-500 font-bold uppercase">{format(new Date(ev.start), 'MMM d @ h:mm a')}</p>
+                      </button>
+                    ))}
+                  </div>
+                )}
 
-              {m.ui?.type === 'confirm' && (
-                <div className="mt-4 flex flex-col sm:flex-row gap-2">
-                  <button onClick={() => handleConfirmedAction(m.ui?.pending)} className={cn("flex-1 py-3 lg:py-4 rounded-xl lg:rounded-2xl text-[10px] font-black uppercase tracking-widest text-white shadow-lg transition-all", m.ui.action?.includes('delete') || m.ui.action === 'clear_day' ? 'bg-red-600' : 'bg-blue-600')}>Confirm</button>
-                  <button onClick={() => setMessages((prev: ChatMessage[]) => prev.filter(msg => msg.id !== m.id))} className="flex-1 bg-slate-100 text-slate-600 py-3 lg:py-4 rounded-xl lg:rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all">Cancel</button>
-                </div>
-              )}
+                {m.ui?.type === 'confirm' && (
+                  <div className="mt-4 flex flex-col sm:flex-row gap-2">
+                    <button onClick={() => handleConfirmedAction(m.ui?.pending)} className={cn("flex-1 py-3 lg:py-4 rounded-xl lg:rounded-2xl text-[10px] font-black uppercase tracking-widest text-white shadow-lg transition-all", m.ui.action?.includes('delete') || m.ui.action === 'clear_day' ? 'bg-red-600' : 'bg-blue-600')}>Confirm</button>
+                    <button onClick={() => setMessages((prev: ChatMessage[]) => prev.filter(msg => msg.id !== m.id))} className="flex-1 bg-slate-100 text-slate-600 py-3 lg:py-4 rounded-xl lg:rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all">Cancel</button>
+                  </div>
+                )}
+              </div>
+              <span className="text-[8px] lg:text-[9px] text-slate-400 font-black mt-1.5 px-3 uppercase tracking-tighter">{format(m.timestamp, 'h:mm a')}</span>
             </div>
-            <span className="text-[8px] lg:text-[9px] text-slate-400 font-black mt-1.5 px-3 uppercase tracking-tighter">{format(m.timestamp, 'h:mm a')}</span>
-          </div>
-        ))}
+          );
+        })}
         {isProcessing && (
           <div className="flex gap-1.5 p-3 items-center bg-white rounded-full border border-slate-100 shadow-sm w-fit animate-pulse">
             <div className="w-1 h-1 bg-blue-600 rounded-full animate-bounce" />

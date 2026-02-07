@@ -148,11 +148,20 @@ async function verifyAction(toolName: string, id: string | null, accessToken: st
   }
 }
 
-export async function processChatAction(message: string, history: any[], accessToken: string, confirmed: boolean = false) {
+export async function processChatAction(
+  message: string, 
+  history: any[], 
+  accessToken: string, 
+  confirmed: boolean = false, 
+  source: 'web' | 'siri' = 'web'
+) {
   const apiKey = process.env.API_KEY;
   if (!apiKey) throw new Error("Missing API_KEY");
 
-  if (confirmed && message.startsWith("Executing ")) {
+  // Siri commands skip initial confirmation UI and force an execution path
+  const isSiri = source === 'siri';
+
+  if ((confirmed || isSiri) && message.startsWith("Executing ")) {
     const match = message.match(/Executing (\w+): (.*)/);
     if (match) {
       const toolName = match[1];
@@ -193,7 +202,8 @@ export async function processChatAction(message: string, history: any[], accessT
         }
 
         await verifyAction(toolName, result?.id || args.id, accessToken, args.date);
-        return { text: "All set! I've updated your schedule." };
+        const prefix = isSiri ? "(Siri command) " : "";
+        return { text: `${prefix}All set! I've updated your schedule.` };
       } catch (e: any) {
         return { text: `Sorry, I hit a snag: ${e.message}` };
       }
@@ -219,7 +229,8 @@ export async function processChatAction(message: string, history: any[], accessT
     - If it's unclear, ask: "Do you want to mark this as complete or delete it permanently?"
   - DELETIONS: List the names of the items before asking for confirmation.
   - CLEAR_DAY: Only delete single-day events. Preserve multi-day events.
-  - Always be specific about which events/tasks you are acting on.`;
+  - Always be specific about which events/tasks you are acting on.
+  ${isSiri ? "- IMPORTANT: You are processing a Siri Shortcut command. Execute actions immediately where possible." : ""}`;
 
   const mappedHistory = history
     .filter(h => h.role === 'user' || h.role === 'assistant')
@@ -244,6 +255,13 @@ export async function processChatAction(message: string, history: any[], accessT
     const parts: Part[] = [];
     for (const call of response.functionCalls) {
       
+      // Handle confirmation-heavy tools differently for Siri
+      if (isSiri && (call.name === "clear_day" || call.name === "delete_event" || call.name === "delete_task")) {
+        // Force immediate execution for Siri instead of returning a UI confirmation
+        const executionText = `Executing ${call.name}: ${JSON.stringify(call.args)}`;
+        return processChatAction(executionText, history, accessToken, true, 'siri');
+      }
+
       if (call.name === "clear_day") {
         const evs = await calendarService.getEvents(`${call.args.date}T00:00:00Z`, `${call.args.date}T23:59:59Z`, accessToken);
         const rangeS = new Date(`${call.args.date}T00:00:00Z`);
@@ -313,7 +331,8 @@ export async function processChatAction(message: string, history: any[], accessT
     toolRounds++;
   }
 
-  return { text: extractModelText(response) || "Got it, I've updated things for you." };
+  const finalPrefix = isSiri ? "(Siri command) " : "";
+  return { text: finalPrefix + (extractModelText(response) || "Got it, I've updated things for you.") };
 }
 
 export async function processTTSAction(text: string) {

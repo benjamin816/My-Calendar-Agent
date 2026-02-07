@@ -56,10 +56,12 @@ const authOptions: NextAuthOptions = {
     async jwt({ token, account, user }) {
       // Initial sign in
       if (account && user) {
+        // Cast account to any to bypass property access errors (access_token, etc.)
+        const acc = account as any;
         return {
-          accessToken: account.access_token,
-          refreshToken: account.refresh_token,
-          expiresAt: account.expires_at,
+          accessToken: acc.access_token,
+          refreshToken: acc.refresh_token,
+          expiresAt: acc.expires_at,
           user,
         };
       }
