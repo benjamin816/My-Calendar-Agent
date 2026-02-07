@@ -6,8 +6,7 @@ import { useSession, signIn, signOut } from "next-auth/react";
 import { CalendarEvent, CalendarTask, ChatMessage } from '../types';
 import { calendarService, setCalendarToken } from '../services/calendar';
 import { ChronosBrain, decodeAudio, playPcmAudio } from '../services/gemini.client';
-// Fixed missing date-fns exports by using native Date or existing functions
-import { format, eachDayOfInterval, addDays, isSameDay, addMinutes, endOfDay, isAfter, isSameYear } from 'date-fns';
+import { format, eachDayOfInterval, addDays, isSameDay, addMinutes, endOfDay } from 'date-fns';
 import { 
   ChatBubbleLeftRightIcon, 
   MicrophoneIcon, 
@@ -35,14 +34,12 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-// Helper to replace missing startOfDay from date-fns
 const startOfDayHelper = (date: Date | number): Date => {
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);
   return d;
 };
 
-// Helper to replace missing subDays from date-fns
 const subDaysHelper = (date: Date | number, amount: number): Date => {
   return addDays(date, -amount);
 };
@@ -114,11 +111,95 @@ export default function ChronosApp() {
     }
   }, []);
 
+  const handleSendMessage = async (text?: string, voice: boolean = false, confirmed: boolean = false, source: 'web' | 'siri' = 'web') => {
+    const msg = text || inputText;
+    if (!msg.trim() && !confirmed) return;
+
+    let currentHistory = [...messages];
+
+    if (!confirmed) {
+      const userMsg: ChatMessage = {
+        id: Date.now().toString(),
+        role: 'user',
+        content: msg,
+        timestamp: new Date(),
+        source: source,
+        processed: false
+      };
+      setMessages(prev => {
+        const newMsgs = [...prev, userMsg];
+        currentHistory = newMsgs;
+        return newMsgs;
+      });
+    }
+
+    setInputText('');
+    setIsProcessing(true);
+
+    try {
+      const result = await brainRef.current?.processMessage(
+        msg, 
+        refreshData, 
+        session?.accessToken as string, 
+        currentHistory,
+        confirmed
+      );
+      
+      if (result) {
+        const assistantMsg: ChatMessage = {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          content: result.text,
+          timestamp: new Date(),
+          ui: result.ui
+        };
+        setMessages(prev => {
+          // Mark the trigger message as processed if it was a siri message
+          return prev.map(m => m.id === currentHistory[currentHistory.length-1].id ? { ...m, processed: true } : m).concat(assistantMsg);
+        });
+        if (voice && result.text) {
+          const audioBase64 = await brainRef.current?.generateSpeech(result.text);
+          if (audioBase64) playPcmAudio(decodeAudio(audioBase64));
+        }
+      }
+    } catch (error: any) {
+      console.error(error);
+      setMessages(prev => [...prev, { id: Date.now().toString(), role: 'system', content: `Error: ${error.message}`, timestamp: new Date() }]);
+    } finally {
+      setIsProcessing(false);
+      refreshData();
+    }
+  };
+
+  // Poll for Siri messages
+  const checkSiriMessages = useCallback(async () => {
+    if (status !== 'authenticated' || isProcessing) return;
+    try {
+      const res = await fetch('/api/siri/pending');
+      const data = await res.json();
+      if (data.messages && data.messages.length > 0) {
+        // Process each message sequentially
+        for (const msg of data.messages) {
+          await handleSendMessage(msg.text, false, false, 'siri');
+        }
+      }
+    } catch (e) {
+      console.error("Polling Siri messages failed", e);
+    }
+  }, [status, isProcessing, handleSendMessage]);
+
+  useEffect(() => {
+    if (status === 'authenticated') {
+      checkSiriMessages();
+      const interval = setInterval(checkSiriMessages, 10000);
+      return () => clearInterval(interval);
+    }
+  }, [status, checkSiriMessages]);
+
   const refreshData = useCallback(async () => {
     if (!session?.accessToken) return;
     try {
       setCalendarToken(session.accessToken as string);
-      // Fixed: replace startOfDay with startOfDayHelper
       const timeMin = startOfDayHelper(addDays(currentDate, -7)).toISOString();
       const timeMax = endOfDay(addDays(currentDate, 14)).toISOString();
       const [evs, tks] = await Promise.all([
@@ -143,58 +224,6 @@ export default function ChronosApp() {
     }
   }, [messages, activeTab]);
 
-  const handleSendMessage = async (text?: string, voice: boolean = false, confirmed: boolean = false) => {
-    const msg = text || inputText;
-    if (!msg.trim() && !confirmed) return;
-
-    let currentHistory = [...messages];
-
-    if (!confirmed) {
-      const userMsg: ChatMessage = {
-        id: Date.now().toString(),
-        role: 'user',
-        content: msg,
-        timestamp: new Date()
-      };
-      setMessages(prev => [...prev, userMsg]);
-      currentHistory.push(userMsg);
-    }
-
-    setInputText('');
-    setIsProcessing(true);
-
-    try {
-      const result = await brainRef.current?.processMessage(
-        msg, 
-        refreshData, 
-        session?.accessToken as string, 
-        currentHistory,
-        confirmed
-      );
-      
-      if (result) {
-        const assistantMsg: ChatMessage = {
-          id: (Date.now() + 1).toString(),
-          role: 'assistant',
-          content: result.text,
-          timestamp: new Date(),
-          ui: result.ui
-        };
-        setMessages(prev => [...prev, assistantMsg]);
-        if (voice && result.text) {
-          const audioBase64 = await brainRef.current?.generateSpeech(result.text);
-          if (audioBase64) playPcmAudio(decodeAudio(audioBase64));
-        }
-      }
-    } catch (error: any) {
-      console.error(error);
-      setMessages(prev => [...prev, { id: Date.now().toString(), role: 'system', content: `Error: ${error.message}`, timestamp: new Date() }]);
-    } finally {
-      setIsProcessing(false);
-      refreshData();
-    }
-  };
-
   const resetChat = () => {
     setMessages([]);
     localStorage.removeItem('chronos_chat_history');
@@ -202,7 +231,6 @@ export default function ChronosApp() {
 
   const handleDurationSelection = (mins: number, pending: any) => {
     const startStr = pending.args.start;
-    // Fixed: replace parseISO with new Date
     const endStr = format(addMinutes(new Date(startStr), mins), "yyyy-MM-dd'T'HH:mm:ss");
     const confirmationText = `Executing create_event: ${JSON.stringify({ ...pending.args, end: endStr })}`;
     handleSendMessage(confirmationText, false, true);
@@ -225,21 +253,17 @@ export default function ChronosApp() {
   };
 
   const displayDays = useMemo(() => {
-    // Fixed: replace startOfDay with startOfDayHelper
     const start = startOfDayHelper(currentDate);
     const end = endOfDay(addDays(start, 2));
     return eachDayOfInterval({ start, end });
   }, [currentDate]);
 
   const getEventsForDay = (day: Date) => {
-    // Fixed: replace startOfDay with startOfDayHelper
     const dayStart = startOfDayHelper(day);
     const dayEnd = endOfDay(day);
     
     return events.filter(e => {
-      // Fixed: replace parseISO with new Date
       const eStart = new Date(e.start);
-      // Fixed: replace parseISO with new Date and subDays with subDaysHelper
       const eEnd = e.isAllDay ? subDaysHelper(new Date(e.end), 0) : new Date(e.end);
       
       if (e.isAllDay) {
@@ -373,7 +397,7 @@ export default function ChronosApp() {
                   <button 
                     onClick={() => setCurrentDate(prev => addDays(prev, 1))} 
                     className="p-2 lg:p-4 hover:bg-slate-100 rounded-2xl text-slate-400 hover:text-blue-600 transition-all active:scale-90"
-                  >
+                    >
                     <ChevronRightIcon className="w-6 h-6 lg:w-10 lg:h-10" />
                   </button>
                 </div>
@@ -508,10 +532,8 @@ export default function ChronosApp() {
 }
 
 function EventCard({ event, onClick }: { event: CalendarEvent, onClick: () => void }) {
-  // Fixed: replace parseISO with new Date
   const startDt = new Date(event.start);
   const endDt = new Date(event.end);
-  // Fixed: replace subDays with subDaysHelper
   const isMultiDay = event.isAllDay 
     ? !isSameDay(startDt, subDaysHelper(endDt, 1))
     : !isSameDay(startDt, endDt);
@@ -579,7 +601,7 @@ function ChatInterface({
            </div>
         )}
         {messages.map((m: ChatMessage) => {
-          const isFromSiri = m.content.startsWith("(Siri command)");
+          const isFromSiri = m.source === 'siri';
           return (
             <div key={m.id} className={cn("flex flex-col animate-in slide-in-from-bottom-2 duration-300", m.role === 'user' ? 'items-end' : 'items-start')}>
               {isFromSiri && (
@@ -589,7 +611,7 @@ function ChatInterface({
                 </div>
               )}
               <div className={cn("max-w-[95%] p-4 lg:p-5 rounded-[1.75rem] text-sm leading-relaxed shadow-sm whitespace-pre-wrap", m.role === 'user' ? 'bg-slate-900 text-white font-medium rounded-br-none' : 'bg-white text-slate-800 border border-slate-100 rounded-bl-none')}>
-                {m.content}
+                {isFromSiri ? `(Siri) ${m.content}` : m.content}
                 
                 {m.ui?.type === 'duration' && (
                   <div className="mt-4 grid grid-cols-3 gap-2">
@@ -604,7 +626,6 @@ function ChatInterface({
                     {m.ui.options?.map((ev: CalendarEvent) => (
                       <button key={ev.id} onClick={() => handlePickEvent(ev, m.ui?.pending)} className="w-full text-left p-3 text-xs border border-slate-100 rounded-2xl hover:bg-blue-50 transition-all">
                         <p className="font-black text-slate-900 mb-0.5">{ev.summary}</p>
-                        {/* Fixed: replace parseISO with new Date */}
                         <p className="text-[9px] text-slate-500 font-bold uppercase">{format(new Date(ev.start), 'MMM d @ h:mm a')}</p>
                       </button>
                     ))}

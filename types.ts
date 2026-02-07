@@ -32,6 +32,8 @@ export interface ChatMessage {
   timestamp: Date;
   isStreaming?: boolean;
   ui?: UIPayload;
+  source?: 'web' | 'siri';
+  processed?: boolean;
 }
 
 export enum CalendarViewType {
