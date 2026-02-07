@@ -183,27 +183,56 @@ export const calendarService = {
 
   getTasks: async (token: string | null = null): Promise<CalendarTask[]> => {
     try {
-      // Step 1: Get all task lists to ensure we don't miss tasks created in non-default lists (common in Calendar UI)
-      const listsData = await tasksFetch('/users/@me/tasklists', token);
-      const lists = listsData.items || [];
+      // Step 1: Attempt to get all task lists
+      let lists = [];
+      try {
+        const listsData = await tasksFetch('/users/@me/tasklists', token);
+        lists = listsData.items || [];
+      } catch (e) {
+        console.warn('Failed to fetch task lists, defaulting to @default', e);
+        lists = [{ id: '@default', title: 'My Tasks' }];
+      }
       
       const allTasks: CalendarTask[] = [];
+      const seenIds = new Set<string>();
       
       // Step 2: Iterate through each list and fetch its tasks
       for (const list of lists) {
         try {
           const data = await tasksFetch(`/lists/${list.id}/tasks?showCompleted=true&showHidden=true`, token);
-          const mapped = (data.items || []).map((item: any) => ({
-            id: item.id,
-            title: item.title,
-            due: item.due,
-            completed: item.status === 'completed',
-            notes: item.notes,
-          }));
-          allTasks.push(...mapped);
+          const items = data.items || [];
+          for (const item of items) {
+            if (!seenIds.has(item.id)) {
+              allTasks.push({
+                id: item.id,
+                title: item.title || '(No Title)',
+                due: item.due,
+                completed: item.status === 'completed',
+                notes: item.notes,
+              });
+              seenIds.add(item.id);
+            }
+          }
         } catch (innerError) {
           console.warn(`Failed to fetch tasks for list ${list.id}:`, innerError);
         }
+      }
+
+      // If still empty and we haven't tried @default explicitly, try one last time
+      if (allTasks.length === 0 && !lists.find(l => l.id === '@default')) {
+        try {
+          const data = await tasksFetch('/lists/@default/tasks?showCompleted=true&showHidden=true', token);
+          const items = data.items || [];
+          for (const item of items) {
+            allTasks.push({
+              id: item.id,
+              title: item.title || '(No Title)',
+              due: item.due,
+              completed: item.status === 'completed',
+              notes: item.notes,
+            });
+          }
+        } catch (e) {}
       }
       
       return allTasks;
@@ -214,12 +243,16 @@ export const calendarService = {
   },
 
   createTask: async (task: { title: string; dueDate?: string; notes?: string }, token: string | null = null): Promise<CalendarTask> => {
-    const body = {
+    const body: any = {
       title: task.title,
-      due: task.dueDate ? new Date(task.dueDate).toISOString() : undefined,
       notes: task.notes,
     };
-    // Defaulting to @default for creation is safe as it maps to the primary list
+    if (task.dueDate) {
+      // Google Tasks expects an RFC3339 timestamp with the time part zeroed for all-day tasks
+      const dateOnly = task.dueDate.split('T')[0];
+      body.due = `${dateOnly}T00:00:00.000Z`;
+    }
+    
     const data = await tasksFetch(`/lists/@default/tasks`, token, {
       method: 'POST',
       body: JSON.stringify(body),
@@ -233,15 +266,14 @@ export const calendarService = {
   },
 
   updateTask: async (id: string, updates: Partial<CalendarTask>, token: string | null = null): Promise<CalendarTask> => {
-    // When updating, we technically need to know which list the task belongs to.
-    // However, the Tasks API @default can often handle many updates if the task is in the primary list.
-    // For a more robust solution, we should pass the listId, but for now we try @default first.
-    // If that fails, we would ideally search for the task's list first.
     const body: any = {};
     if (updates.title) body.title = updates.title;
     if (updates.notes) body.notes = updates.notes;
     if (updates.completed !== undefined) body.status = updates.completed ? 'completed' : 'needsAction';
-    if (updates.due) body.due = new Date(updates.due).toISOString();
+    if (updates.due) {
+      const dateOnly = updates.due.split('T')[0];
+      body.due = `${dateOnly}T00:00:00.000Z`;
+    }
 
     const data = await tasksFetch(`/lists/@default/tasks/${id}`, token, {
       method: 'PATCH',
