@@ -1,23 +1,9 @@
 
 import { NextResponse } from 'next/server';
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth";
-import { siriStorage } from '@/services/siriStorage';
-
 /**
- * Fetches and clears pending Siri messages for the authenticated user.
+ * DEPRECATED
+ * Siri handoff now uses direct URL parameters in the shortcut's "Open URL" action.
  */
 export async function GET() {
-  try {
-    const session = await getServerSession(authOptions);
-    if (!session) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    const messages = await siriStorage.popAll();
-    return NextResponse.json({ messages });
-  } catch (error: any) {
-    console.error("Pending Siri API Error:", error);
-    return NextResponse.json({ error: "Failed to fetch pending messages" }, { status: 500 });
-  }
+  return NextResponse.json({ messages: [], deprecated: true });
 }

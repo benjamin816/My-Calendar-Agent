@@ -1,49 +1,55 @@
 
 import { NextRequest, NextResponse } from 'next/server';
-import { siriStorage } from '@/services/siriStorage';
 
 /**
- * SIRI SHORTCUT WEBHOOK
+ * SIRI SHORTCUT WEBHOOK (Stateless)
  * 
- * Extracts dictated text from Siri and stores it durably for the UI to consume.
+ * Instead of persisting dictated text in a database, this returns a deep link
+ * that the Siri Shortcut can open to hand over the command to the Chronos UI.
  */
 export async function POST(req: NextRequest) {
   try {
     const siriKey = req.headers.get('x-chronos-key');
     const secret = process.env.CHRONOS_SIRI_KEY;
 
+    // Security check
     if (!secret || siriKey !== secret) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const bodyText = await req.text();
     let extractedText: string | null = null;
+    const contentType = req.headers.get('content-type') || '';
 
-    if (bodyText.trim().startsWith('{')) {
-      try {
-        const body = JSON.parse(bodyText);
-        extractedText = body.text || body.value || body.dictatedText || body.command;
-      } catch (e) {}
-    }
-
-    if (!extractedText && bodyText.trim()) {
-      extractedText = bodyText.trim();
+    // Handle JSON or Plain Text dictated commands
+    if (contentType.includes('application/json')) {
+      const body = await req.json();
+      extractedText = body.text || body.value || body.dictatedText || body.command;
+    } else {
+      const bodyText = await req.text();
+      // Try parsing as JSON if it looks like it
+      if (bodyText.trim().startsWith('{')) {
+        try {
+          const body = JSON.parse(bodyText);
+          extractedText = body.text || body.value || body.dictatedText || body.command;
+        } catch (e) {
+          extractedText = bodyText.trim();
+        }
+      } else {
+        extractedText = bodyText.trim();
+      }
     }
 
     if (!extractedText) {
       return NextResponse.json({ error: "Missing dictated text" }, { status: 400 });
     }
 
-    // Persist durably
-    await siriStorage.push(extractedText);
-
-    // Return a deep link so the Shortcut can "Open URL" immediately
+    // Construct the direct deep link for the iOS Shortcut
     const baseUrl = process.env.NEXTAUTH_URL || `https://${req.headers.get('host')}`;
+    const redirectUrl = `${baseUrl}/ai?text=${encodeURIComponent(extractedText)}`;
     
     return NextResponse.json({ 
       ok: true,
-      extracted: extractedText.substring(0, 30) + "...",
-      deepLink: `${baseUrl}/ai?from=siri`
+      redirectUrl
     });
     
   } catch (error: any) {

@@ -1,3 +1,4 @@
+
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react';
@@ -21,7 +22,6 @@ import {
   SparklesIcon,
   CalendarDaysIcon,
   CpuChipIcon,
-  ArrowUturnLeftIcon,
   ExclamationCircleIcon,
   BellAlertIcon,
   QuestionMarkCircleIcon,
@@ -56,8 +56,7 @@ function ChronosAppContent() {
   const brainRef = useRef<ChronosBrain | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
-  // Replaced NodeJS.Timeout with ReturnType<typeof setTimeout> to resolve type error in browser environment.
-  const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasHandledParam = useRef(false);
 
   const isToday = isSameDay(currentDate, new Date());
 
@@ -121,6 +120,7 @@ function ChronosAppContent() {
     if (!msg.trim() && !confirmed) return;
 
     if (clearHistory) {
+      // CLEAR CHAT: Reset messages to just the current user input
       setMessages([{ id: Date.now().toString(), role: 'user', content: msg, timestamp: new Date() }]);
     } else if (!confirmed) {
       setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', content: msg, timestamp: new Date() }]);
@@ -130,7 +130,7 @@ function ChronosAppContent() {
     setIsProcessing(true);
 
     try {
-      // Note: brainRef should use history from state if not clearing, but for Siri we might start fresh
+      // Use an empty history array if clearHistory is true to force a fresh brain context
       const currentHistory = clearHistory ? [] : messages;
       const result = await brainRef.current?.processMessage(msg, refreshData, session?.accessToken as string, currentHistory, confirmed);
       
@@ -150,54 +150,19 @@ function ChronosAppContent() {
     }
   }, [inputText, messages, session, refreshData]);
 
-  // SIRI / QUERY PARAM LOGIC
+  // Siri/URL Parameter Handoff Logic
   useEffect(() => {
-    if (status !== 'authenticated') return;
+    if (status !== 'authenticated' || hasHandledParam.current) return;
 
-    const checkSiri = async () => {
-      // 1. Check Query Param ?text=...
-      const textParam = searchParams.get('text');
-      if (textParam) {
-        setActiveTab('chat');
-        handleSendMessage(textParam, true, false, true);
-        // Clear param from URL
-        const params = new URLSearchParams(searchParams.toString());
-        params.delete('text');
-        params.delete('from');
-        router.replace(`/ai?${params.toString()}`);
-        return; // Don't check poll on the same tick if we handled a param
-      }
-
-      // 2. Poll /api/siri/pending
-      try {
-        const res = await fetch('/api/siri/pending');
-        if (res.ok) {
-          const data = await res.json();
-          if (data.messages && data.messages.length > 0) {
-            const latest = data.messages[data.messages.length - 1];
-            setActiveTab('chat');
-            handleSendMessage(latest.text, true, false, true);
-          }
-        }
-      } catch (e) {
-        console.warn("Polling error:", e);
-      }
-    };
-
-    // Initial check
-    checkSiri();
-
-    // Start polling if page is visible
-    const interval = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        checkSiri();
-      }
-    }, 2000);
-
-    pollingRef.current = interval;
-    return () => {
-      if (pollingRef.current) clearInterval(pollingRef.current);
-    };
+    const textParam = searchParams.get('text');
+    if (textParam) {
+      hasHandledParam.current = true;
+      setActiveTab('chat');
+      // Execute dictated command: clear old chat, auto-send, and trigger voice response
+      handleSendMessage(textParam, true, false, true);
+      // Clean up the URL to prevent re-execution on refresh
+      router.replace('/ai');
+    }
   }, [status, searchParams, router, handleSendMessage]);
 
   const resetChat = () => {
@@ -280,7 +245,6 @@ function ChronosAppContent() {
         <main className="flex-1 overflow-hidden p-3 lg:p-8 flex flex-col min-h-0">
           {activeTab === 'calendar' && (
             <div className="flex-1 bg-white rounded-3xl lg:rounded-[2.5rem] border border-slate-200 shadow-xl shadow-slate-200/50 overflow-hidden flex flex-col animate-in fade-in slide-in-from-bottom-4 duration-500">
-              {/* Date Navigation */}
               <div className="flex items-center justify-between p-4 lg:p-8 border-b border-slate-100">
                 {!isToday ? (
                   <button onClick={() => setCurrentDate(d => addDays(d, -1))} className="p-2 lg:p-3 hover:bg-slate-50 rounded-2xl border border-slate-100 transition-all">
@@ -289,18 +253,15 @@ function ChronosAppContent() {
                 ) : (
                   <div className="w-10 lg:w-12 h-10 lg:h-12" />
                 )}
-                
                 <div className="text-center">
                   <p className="text-2xl lg:text-4xl font-black text-slate-900 tracking-tighter">{format(currentDate, 'd')}</p>
                   <p className={cn("text-[8px] lg:text-[10px] font-black uppercase tracking-[0.3em]", isToday ? "text-blue-600" : "text-slate-400")}>{format(currentDate, 'EEEE')}</p>
                 </div>
-                
                 <button onClick={() => setCurrentDate(d => addDays(d, 1))} className="p-2 lg:p-3 hover:bg-slate-50 rounded-2xl border border-slate-100 transition-all">
                   <ChevronRightIcon className="w-5 h-5 lg:w-6 lg:h-6" />
                 </button>
               </div>
 
-              {/* Day Scroll Content */}
               <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-8 custom-scrollbar overscroll-contain">
                 {isToday && currentDayContent.overdue.length > 0 && (
                   <div className="space-y-3 animate-in slide-in-from-left duration-500">
@@ -386,7 +347,6 @@ function ChronosAppContent() {
         </main>
       </div>
 
-      {/* Navigation Mobile - Fixed Bottom */}
       <nav className="lg:hidden fixed bottom-0 left-0 right-0 h-20 bg-white border-t border-slate-200 flex items-center justify-around z-50 px-4 pb-safe shadow-[0_-4px_20px_-5px_rgba(0,0,0,0.1)]">
         <MobileNavItem icon={<CpuChipIcon className="w-6 h-6" />} label="AI" active={activeTab === 'chat'} onClick={() => setActiveTab('chat')} />
         <MobileNavItem icon={<Squares2X2Icon className="w-6 h-6" />} label="Schedule" active={activeTab === 'calendar'} onClick={() => setActiveTab('calendar')} />
