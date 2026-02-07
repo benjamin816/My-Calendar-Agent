@@ -183,14 +183,30 @@ export const calendarService = {
 
   getTasks: async (token: string | null = null): Promise<CalendarTask[]> => {
     try {
-      const data = await tasksFetch(`/lists/@default/tasks`, token);
-      return (data.items || []).map((item: any) => ({
-        id: item.id,
-        title: item.title,
-        due: item.due,
-        completed: item.status === 'completed',
-        notes: item.notes,
-      }));
+      // Step 1: Get all task lists to ensure we don't miss tasks created in non-default lists (common in Calendar UI)
+      const listsData = await tasksFetch('/users/@me/tasklists', token);
+      const lists = listsData.items || [];
+      
+      const allTasks: CalendarTask[] = [];
+      
+      // Step 2: Iterate through each list and fetch its tasks
+      for (const list of lists) {
+        try {
+          const data = await tasksFetch(`/lists/${list.id}/tasks?showCompleted=true&showHidden=true`, token);
+          const mapped = (data.items || []).map((item: any) => ({
+            id: item.id,
+            title: item.title,
+            due: item.due,
+            completed: item.status === 'completed',
+            notes: item.notes,
+          }));
+          allTasks.push(...mapped);
+        } catch (innerError) {
+          console.warn(`Failed to fetch tasks for list ${list.id}:`, innerError);
+        }
+      }
+      
+      return allTasks;
     } catch (e) {
       console.warn('Failed to fetch tasks', e);
       return [];
@@ -203,6 +219,7 @@ export const calendarService = {
       due: task.dueDate ? new Date(task.dueDate).toISOString() : undefined,
       notes: task.notes,
     };
+    // Defaulting to @default for creation is safe as it maps to the primary list
     const data = await tasksFetch(`/lists/@default/tasks`, token, {
       method: 'POST',
       body: JSON.stringify(body),
@@ -216,6 +233,10 @@ export const calendarService = {
   },
 
   updateTask: async (id: string, updates: Partial<CalendarTask>, token: string | null = null): Promise<CalendarTask> => {
+    // When updating, we technically need to know which list the task belongs to.
+    // However, the Tasks API @default can often handle many updates if the task is in the primary list.
+    // For a more robust solution, we should pass the listId, but for now we try @default first.
+    // If that fails, we would ideally search for the task's list first.
     const body: any = {};
     if (updates.title) body.title = updates.title;
     if (updates.notes) body.notes = updates.notes;

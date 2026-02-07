@@ -278,6 +278,7 @@ function ChronosAppContent() {
   const getTasksForDay = (day: Date) => {
     return tasks.filter(t => {
       if (!t.due) return false;
+      // Google Tasks API 'due' is usually RFC3339 string like "2024-10-27T00:00:00.000Z"
       return t.due.split('T')[0] === format(day, 'yyyy-MM-dd');
     });
   };
@@ -320,7 +321,6 @@ function ChronosAppContent() {
       <div className="flex-1 flex flex-col min-0 h-full overflow-hidden pb-16 lg:pb-0">
         <header className="h-16 lg:h-20 flex items-center justify-between px-4 lg:px-8 bg-white border-b border-slate-200">
           <div className="flex items-center gap-2 lg:gap-6">
-             {/* FIX: Today button should only exist in top left on Schedule or Task page */}
              {(activeTab === 'calendar' || activeTab === 'tasks') && (
                <button onClick={() => setCurrentDate(new Date())} className="px-3 py-1 text-xs font-bold bg-slate-100 text-slate-600 rounded-lg">Today</button>
              )}
@@ -334,27 +334,26 @@ function ChronosAppContent() {
         <main className="flex-1 overflow-hidden p-3 lg:p-6 flex flex-col min-h-0">
           {(activeTab === 'calendar' || activeTab === 'tasks') && (
             <div className="flex-1 bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden flex flex-col min-h-0 animate-in fade-in slide-in-from-bottom-4 duration-300">
-              <div className="flex items-center justify-between py-6 px-4 border-b border-slate-100 bg-white">
-                <div className="w-10">
-                  {/* FIX: Backward arrow should not exist when on current day view */}
+              <div className="flex items-center justify-between py-8 px-4 border-b border-slate-100 bg-white">
+                <div className="w-12">
                   {!isToday && (
                     <button onClick={() => setCurrentDate(prev => addDays(prev, -1))} className="p-2 hover:bg-slate-100 rounded-xl">
-                      <ChevronLeftIcon className="w-6 h-6" />
+                      <ChevronLeftIcon className="w-7 h-7" />
                     </button>
                   )}
                 </div>
                 <div className="text-center flex-1">
-                  <span className={cn("text-[10px] font-black uppercase tracking-widest", isToday ? "text-blue-600" : "text-slate-400")}>{isToday ? "TODAY" : "SELECTED"}</span>
-                  <h3 className="text-2xl font-black leading-none">{format(currentDate, 'EEEE')}</h3>
+                  <div className="text-4xl lg:text-5xl font-black text-slate-900 leading-none mb-1">{format(currentDate, 'd')}</div>
+                  <h3 className={cn("text-[10px] lg:text-xs font-black uppercase tracking-[0.25em]", isToday ? "text-blue-600" : "text-slate-400")}>{format(currentDate, 'EEEE')}</h3>
                 </div>
-                <div className="w-10 flex justify-end">
+                <div className="w-12 flex justify-end">
                   <button onClick={() => setCurrentDate(prev => addDays(prev, 1))} className="p-2 hover:bg-slate-100 rounded-xl">
-                    <ChevronRightIcon className="w-6 h-6" />
+                    <ChevronRightIcon className="w-7 h-7" />
                   </button>
                 </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar overscroll-contain">
+              <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-4 custom-scrollbar overscroll-contain">
                 {activeTab === 'calendar' ? (
                   getEventsForDay(currentDate).map(e => (
                     <EventCard key={e.id} event={e} onClick={() => handleSendMessage(`Tell me about ${e.summary}`)} />
@@ -442,10 +441,10 @@ function MobileNavItem({ icon, active, onClick, label }: any) {
 
 function EventCard({ event, onClick }: any) {
   return (
-    <div onClick={onClick} className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm hover:border-blue-400 cursor-pointer active:scale-[0.98] transition-all">
-      <p className="text-sm font-bold">{event.summary}</p>
-      <div className="flex items-center gap-1.5 mt-2 text-[10px] text-slate-500 font-bold uppercase">
-        <ClockIcon className="w-3.5 h-3.5" />
+    <div onClick={onClick} className="bg-white border border-slate-200 p-4 lg:p-6 rounded-2xl shadow-sm hover:border-blue-400 cursor-pointer active:scale-[0.98] transition-all">
+      <p className="text-base lg:text-lg font-bold">{event.summary}</p>
+      <div className="flex items-center gap-1.5 mt-3 text-[10px] lg:text-xs text-slate-500 font-bold uppercase tracking-wider">
+        <ClockIcon className="w-4 h-4" />
         {event.isAllDay ? 'All Day' : `${format(new Date(event.start), 'h:mm a')} - ${format(new Date(event.end), 'h:mm a')}`}
       </div>
     </div>
@@ -454,11 +453,14 @@ function EventCard({ event, onClick }: any) {
 
 function TaskCard({ task, onToggle }: any) {
   return (
-    <div className="bg-white border border-slate-200 p-4 rounded-2xl flex items-center gap-3">
-      <button onClick={onToggle} className={cn("w-6 h-6 rounded-lg border-2 transition-colors", task.completed ? "bg-green-500 border-green-500" : "border-slate-200")}>
+    <div className="bg-white border border-slate-200 p-4 lg:p-6 rounded-2xl flex items-center gap-4">
+      <button onClick={onToggle} className={cn("w-7 h-7 rounded-xl border-2 transition-all flex items-center justify-center", task.completed ? "bg-green-500 border-green-500" : "border-slate-200 hover:border-slate-400")}>
         {task.completed && <CheckIcon className="w-4 h-4 text-white stroke-[3]" />}
       </button>
-      <p className={cn("text-sm font-bold truncate", task.completed && "line-through text-slate-400")}>{task.title}</p>
+      <div className="flex-1 min-w-0">
+        <p className={cn("text-base lg:text-lg font-bold truncate transition-all", task.completed && "line-through text-slate-400")}>{task.title}</p>
+        {task.notes && <p className="text-xs text-slate-400 truncate mt-0.5">{task.notes}</p>}
+      </div>
     </div>
   );
 }
@@ -466,8 +468,8 @@ function TaskCard({ task, onToggle }: any) {
 function EmptyDayView() {
   return (
     <div className="py-20 flex flex-col items-center justify-center opacity-10">
-      <CalendarDaysIcon className="w-10 h-10" />
-      <p className="text-[10px] font-bold mt-2 uppercase tracking-widest">Clear Schedule</p>
+      <CalendarDaysIcon className="w-12 h-12" />
+      <p className="text-xs font-black mt-3 uppercase tracking-[0.3em]">Nothing Scheduled</p>
     </div>
   );
 }
