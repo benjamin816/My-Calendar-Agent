@@ -7,8 +7,8 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { CalendarEvent, CalendarTask, ChatMessage } from '../../types';
 import { calendarService, setCalendarToken } from '../../services/calendar';
 import { ChronosBrain, decodeAudio, playPcmAudio } from '../../services/gemini.client';
-// Fix: Removed unused exports (eachDayOfInterval, isBefore, isAfter) and the missing parseISO export.
-import { format, addDays, isSameDay, addMinutes, endOfDay } from 'date-fns';
+// Fix: Removed startOfToday as it may not be exported in the current date-fns version
+import { format, addDays, isSameDay, addMinutes, endOfDay, isBefore } from 'date-fns';
 import { 
   ChatBubbleLeftRightIcon, 
   MicrophoneIcon, 
@@ -135,14 +135,19 @@ function ChronosAppContent() {
     }
   }, [session, currentDate]);
 
-  const handleSendMessage = useCallback(async (text?: string, voice: boolean = false, confirmed: boolean = false, source: 'web' | 'siri' = 'web') => {
+  const handleSendMessage = useCallback(async (
+    text?: string, 
+    voice: boolean = false, 
+    confirmed: boolean = false, 
+    source: 'web' | 'siri' = 'web',
+    historyOverride?: ChatMessage[]
+  ) => {
     const msg = text || inputText;
     if (!msg.trim() && !confirmed) return;
 
-    let currentHistory = [...messages];
-
+    let userMsg: ChatMessage | null = null;
     if (!confirmed) {
-      const userMsg: ChatMessage = {
+      userMsg = {
         id: Date.now().toString(),
         role: 'user',
         content: msg,
@@ -150,12 +155,11 @@ function ChronosAppContent() {
         source: source,
         processed: false
       };
-      setMessages(prev => {
-        const newMsgs = [...prev, userMsg];
-        currentHistory = newMsgs;
-        return newMsgs;
-      });
+      setMessages(prev => [...prev, userMsg!]);
     }
+
+    const baseHistory = historyOverride || messages;
+    const currentHistory = userMsg ? [...baseHistory, userMsg] : baseHistory;
 
     setInputText('');
     setIsProcessing(true);
@@ -196,22 +200,60 @@ function ChronosAppContent() {
 
   useEffect(() => {
     const siri = searchParams.get('siri');
-    const text = searchParams.get('text');
+    const textParam = searchParams.get('text');
     const rid = searchParams.get('rid');
 
     if (siri === '1') {
       setActiveTab('chat');
     }
 
-    if (siri === '1' && text && rid && rid !== lastProcessedRid.current) {
+    if (siri === '1' && rid && rid !== lastProcessedRid.current) {
       lastProcessedRid.current = rid;
-      handleSendMessage(text, false, false, 'siri');
       
-      const url = new URL(window.location.href);
-      url.searchParams.delete('siri');
-      url.searchParams.delete('text');
-      url.searchParams.delete('rid');
-      window.history.replaceState({}, '', url.toString());
+      const triggerSiri = async () => {
+        const welcome: ChatMessage = {
+          id: Date.now().toString(),
+          role: 'assistant',
+          content: "Siri session initialized. I'm clearing the previous chat to focus on your request.",
+          timestamp: new Date()
+        };
+        setMessages([welcome]);
+
+        let dictatedText = textParam;
+
+        if (!dictatedText) {
+          try {
+            const res = await fetch('/api/siri/pending');
+            const data = await res.json();
+            if (data.messages && data.messages.length > 0) {
+              dictatedText = data.messages[data.messages.length - 1].text;
+            } else {
+              setMessages(prev => [...prev, {
+                id: 'sys-' + Date.now(),
+                role: 'system',
+                content: "No pending Siri message found in the queue.",
+                timestamp: new Date()
+              }]);
+              return;
+            }
+          } catch (e) {
+            console.error("Failed to fetch pending Siri message", e);
+            return;
+          }
+        }
+
+        if (dictatedText) {
+          handleSendMessage(dictatedText, false, false, 'siri', [welcome]);
+        }
+
+        const url = new URL(window.location.href);
+        url.searchParams.delete('siri');
+        url.searchParams.delete('text');
+        url.searchParams.delete('rid');
+        window.history.replaceState({}, '', url.toString());
+      };
+
+      triggerSiri();
     }
   }, [searchParams, handleSendMessage]);
 
@@ -271,48 +313,30 @@ function ChronosAppContent() {
     }).sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
   };
 
-  const getTasksForDay = (day: Date) => {
-    return tasks.filter(t => {
-      if (!t.due) return false;
-      return t.due.split('T')[0] === format(day, 'yyyy-MM-dd');
-    });
-  };
-
-  const groupedTasks = useMemo(() => {
-    const todayStr = format(new Date(), 'yyyy-MM-dd');
+  const currentDayTasks = useMemo(() => {
+    const selectedDayStr = format(currentDate, 'yyyy-MM-dd');
     const result = {
       overdue: [] as CalendarTask[],
-      today: [] as CalendarTask[],
-      upcoming: [] as CalendarTask[],
-      noDate: [] as CalendarTask[],
-      completed: [] as CalendarTask[],
+      dueToday: [] as CalendarTask[],
+      completedToday: [] as CalendarTask[],
     };
 
     tasks.forEach(t => {
-      if (t.completed) {
-        result.completed.push(t);
-        return;
-      }
-      if (!t.due) {
-        result.noDate.push(t);
-        return;
-      }
+      if (!t.due) return;
       const dueStr = t.due.split('T')[0];
-      if (dueStr === todayStr) {
-        result.today.push(t);
-      } else if (dueStr < todayStr) {
+      
+      if (dueStr === selectedDayStr) {
+        if (t.completed) result.completedToday.push(t);
+        else result.dueToday.push(t);
+      } else if (dueStr < selectedDayStr && !t.completed) {
         result.overdue.push(t);
-      } else {
-        result.upcoming.push(t);
       }
     });
 
-    // Sort upcoming by date
-    result.upcoming.sort((a, b) => a.due!.localeCompare(b.due!));
     result.overdue.sort((a, b) => a.due!.localeCompare(b.due!));
     
     return result;
-  }, [tasks]);
+  }, [tasks, currentDate]);
 
   const toggleTask = async (task: CalendarTask) => {
     if (!session?.accessToken || isProcessing) return;
@@ -322,6 +346,19 @@ function ChronosAppContent() {
       await refreshData();
     } catch (e) { console.error(e); }
     finally { setIsProcessing(false); }
+  };
+
+  const handlePrevDay = () => {
+    if (isToday) return;
+    const prev = addDays(currentDate, -1);
+    // Fix: Using startOfDayHelper instead of missing startOfToday from date-fns
+    if (!isBefore(prev, startOfDayHelper(new Date()))) {
+      setCurrentDate(prev);
+    }
+  };
+
+  const handleNextDay = () => {
+    setCurrentDate(prev => addDays(prev, 1));
   };
 
   if (status === "loading") return null;
@@ -352,7 +389,7 @@ function ChronosAppContent() {
       <div className="flex-1 flex flex-col min-0 h-full overflow-hidden pb-16 lg:pb-0">
         <header className="h-16 lg:h-20 flex items-center justify-between px-4 lg:px-8 bg-white border-b border-slate-200">
           <div className="flex items-center gap-2 lg:gap-6">
-             {activeTab === 'calendar' && (
+             {(activeTab === 'calendar' || activeTab === 'tasks') && (
                <button onClick={() => setCurrentDate(new Date())} className="px-3 py-1 text-xs font-bold bg-slate-100 text-slate-600 rounded-lg">Today</button>
              )}
              <h2 className="text-lg lg:text-2xl font-black tracking-tight">
@@ -372,97 +409,84 @@ function ChronosAppContent() {
         </header>
 
         <main className="flex-1 overflow-hidden p-3 lg:p-6 flex flex-col min-h-0">
-          {activeTab === 'calendar' && (
+          {(activeTab === 'calendar' || activeTab === 'tasks') && (
             <div className="flex-1 bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden flex flex-col min-h-0 animate-in fade-in slide-in-from-bottom-4 duration-300">
               <div className="flex items-center justify-between py-8 px-4 border-b border-slate-100 bg-white">
                 <div className="w-12">
-                  <button onClick={() => setCurrentDate(prev => addDays(prev, -1))} className="p-2 hover:bg-slate-100 rounded-xl">
-                    <ChevronLeftIcon className="w-7 h-7" />
-                  </button>
+                  {!isToday && (
+                    <button onClick={handlePrevDay} className="p-2 hover:bg-slate-100 rounded-xl">
+                      <ChevronLeftIcon className="w-7 h-7" />
+                    </button>
+                  )}
                 </div>
                 <div className="text-center flex-1">
                   <div className="text-4xl lg:text-5xl font-black text-slate-900 leading-none mb-1">{format(currentDate, 'd')}</div>
                   <h3 className={cn("text-[10px] lg:text-xs font-black uppercase tracking-[0.25em]", isToday ? "text-blue-600" : "text-slate-400")}>{format(currentDate, 'EEEE')}</h3>
                 </div>
                 <div className="w-12 flex justify-end">
-                  <button onClick={() => setCurrentDate(prev => addDays(prev, 1))} className="p-2 hover:bg-slate-100 rounded-xl">
+                  <button onClick={handleNextDay} className="p-2 hover:bg-slate-100 rounded-xl">
                     <ChevronRightIcon className="w-7 h-7" />
                   </button>
                 </div>
               </div>
 
               <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-4 custom-scrollbar overscroll-contain">
-                <div className="space-y-4">
-                  <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 px-2">Events</h4>
-                  {getEventsForDay(currentDate).map(e => (
-                    <EventCard key={e.id} event={e} onClick={() => handleSendMessage(`Tell me about ${e.summary}`)} />
-                  ))}
-                  {getEventsForDay(currentDate).length === 0 && <EmptyDayView label="No Events Today" />}
-                </div>
-
-                <div className="pt-6 space-y-4">
-                  <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 px-2">Tasks for Today</h4>
-                  {getTasksForDay(currentDate).map(t => (
-                    <TaskCard key={t.id} task={t} onToggle={() => toggleTask(t)} />
-                  ))}
-                  {getTasksForDay(currentDate).length === 0 && <EmptyDayView label="No Tasks for Today" />}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'tasks' && (
-            <div className="flex-1 bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden flex flex-col min-h-0 animate-in fade-in slide-in-from-bottom-4 duration-300">
-              <div className="flex-1 overflow-y-auto p-4 lg:p-8 custom-scrollbar overscroll-contain">
-                <div className="max-w-3xl mx-auto space-y-10">
-                  {groupedTasks.overdue.length > 0 && (
-                    <section className="space-y-3">
-                      <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-red-500 px-2 flex items-center gap-2">
-                        <InformationCircleIcon className="w-4 h-4" />
-                        Overdue
-                      </h4>
-                      {groupedTasks.overdue.map(t => <TaskCard key={t.id} task={t} onToggle={() => toggleTask(t)} />)}
-                    </section>
-                  )}
-
-                  <section className="space-y-3">
-                    <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-600 px-2">Today</h4>
-                    {groupedTasks.today.length > 0 ? (
-                      groupedTasks.today.map(t => <TaskCard key={t.id} task={t} onToggle={() => toggleTask(t)} />)
-                    ) : (
-                      <p className="text-xs text-slate-400 italic px-2">You're all caught up for today.</p>
-                    )}
-                  </section>
-
-                  {groupedTasks.noDate.length > 0 && (
-                    <section className="space-y-3">
-                      <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 px-2">Someday / No Date</h4>
-                      {groupedTasks.noDate.map(t => <TaskCard key={t.id} task={t} onToggle={() => toggleTask(t)} />)}
-                    </section>
-                  )}
-
-                  {groupedTasks.upcoming.length > 0 && (
-                    <section className="space-y-3">
-                      <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 px-2">Upcoming</h4>
-                      {groupedTasks.upcoming.map(t => <TaskCard key={t.id} task={t} onToggle={() => toggleTask(t)} />)}
-                    </section>
-                  )}
-
-                  {groupedTasks.completed.length > 0 && (
-                    <section className="space-y-3 opacity-60">
-                      <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 px-2">Recently Completed</h4>
-                      {groupedTasks.completed.slice(0, 5).map(t => <TaskCard key={t.id} task={t} onToggle={() => toggleTask(t)} />)}
-                    </section>
-                  )}
-
-                  {tasks.length === 0 && (
-                    <div className="py-20 flex flex-col items-center justify-center text-slate-300">
-                      <ListBulletIcon className="w-16 h-16 mb-4" />
-                      <p className="font-black uppercase tracking-widest text-sm">No tasks found</p>
-                      <p className="text-xs mt-2">Ask the AI to create a new task for you.</p>
+                {activeTab === 'calendar' ? (
+                  <>
+                    <div className="space-y-4">
+                      <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 px-2">Events</h4>
+                      {getEventsForDay(currentDate).map(e => (
+                        <EventCard key={e.id} event={e} onClick={() => handleSendMessage(`Tell me about ${e.summary}`)} />
+                      ))}
+                      {getEventsForDay(currentDate).length === 0 && <EmptyDayView label="No Events Today" />}
                     </div>
-                  )}
-                </div>
+
+                    <div className="pt-6 space-y-4">
+                      <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 px-2">Tasks for Today</h4>
+                      {currentDayTasks.dueToday.concat(currentDayTasks.completedToday).map(t => (
+                        <TaskCard key={t.id} task={t} onToggle={() => toggleTask(t)} />
+                      ))}
+                      {currentDayTasks.dueToday.length === 0 && currentDayTasks.completedToday.length === 0 && <EmptyDayView label="No Tasks for Today" />}
+                    </div>
+                  </>
+                ) : (
+                  <div className="max-w-3xl mx-auto space-y-10">
+                    {currentDayTasks.overdue.length > 0 && (
+                      <section className="space-y-3">
+                        <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-red-500 px-2 flex items-center gap-2">
+                          <InformationCircleIcon className="w-4 h-4" />
+                          Overdue
+                        </h4>
+                        {currentDayTasks.overdue.map(t => <TaskCard key={t.id} task={t} onToggle={() => toggleTask(t)} />)}
+                      </section>
+                    )}
+
+                    <section className="space-y-3">
+                      <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-600 px-2">
+                        {isToday ? 'Today' : format(currentDate, 'MMM d')}
+                      </h4>
+                      {currentDayTasks.dueToday.length > 0 ? (
+                        currentDayTasks.dueToday.map(t => <TaskCard key={t.id} task={t} onToggle={() => toggleTask(t)} />)
+                      ) : (
+                        <p className="text-xs text-slate-400 italic px-2">No pending tasks for this day.</p>
+                      )}
+                    </section>
+
+                    {currentDayTasks.completedToday.length > 0 && (
+                      <section className="space-y-3 opacity-60">
+                        <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 px-2">Completed</h4>
+                        {currentDayTasks.completedToday.map(t => <TaskCard key={t.id} task={t} onToggle={() => toggleTask(t)} />)}
+                      </section>
+                    )}
+
+                    {currentDayTasks.overdue.length === 0 && currentDayTasks.dueToday.length === 0 && currentDayTasks.completedToday.length === 0 && (
+                      <div className="py-20 flex flex-col items-center justify-center text-slate-300">
+                        <ListBulletIcon className="w-16 h-16 mb-4" />
+                        <p className="font-black uppercase tracking-widest text-sm">No tasks found for this day</p>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -563,7 +587,6 @@ function TaskCard({ task, onToggle }: any) {
     const dueStr = task.due.split('T')[0];
     const todayStr = format(new Date(), 'yyyy-MM-dd');
     if (dueStr === todayStr) return 'Due Today';
-    // Fix: Replaced parseISO with new Date() as parseISO was not exported from date-fns.
     return `Due ${format(new Date(task.due), 'MMM d')}`;
   }, [task.due]);
 
@@ -614,8 +637,9 @@ function ChatInterface({
           <div key={m.id} className={cn("flex flex-col animate-in fade-in slide-in-from-bottom-2 duration-300", m.role === 'user' ? 'items-end' : 'items-start')}>
             {m.source === 'siri' && (
               <div className="flex items-center gap-1.5 mb-1 px-3">
-                <CpuChipIcon className="w-3 h-3 text-blue-500" />
-                <span className="text-[9px] font-black text-blue-500 uppercase tracking-widest">Siri Input</span>
+                <span className="text-[9px] font-black text-blue-500 uppercase tracking-widest flex items-center gap-1">
+                  <CpuChipIcon className="w-3 h-3" /> Siri Input
+                </span>
               </div>
             )}
             <div className={cn("max-w-[90%] p-4 rounded-[1.5rem] text-sm shadow-sm whitespace-pre-wrap transition-all", m.role === 'user' ? 'bg-slate-900 text-white rounded-br-none' : 'bg-white text-slate-800 border border-slate-100 rounded-bl-none')}>
