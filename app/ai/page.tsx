@@ -3,7 +3,7 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react';
 import { useSession, signIn, signOut } from "next-auth/react";
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { CalendarEvent, CalendarTask, ChatMessage } from '../../types';
 import { calendarService, setCalendarToken } from '../../services/calendar';
 import { ChronosBrain, decodeAudio, playPcmAudio } from '../../services/gemini.client';
@@ -48,6 +48,7 @@ const subDaysHelper = (date: Date | number, amount: number): Date => {
 function ChronosAppContent() {
   const { data: session, status } = useSession();
   const searchParams = useSearchParams();
+  const router = useRouter();
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [tasks, setTasks] = useState<CalendarTask[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -56,8 +57,7 @@ function ChronosAppContent() {
   const [isListening, setIsListening] = useState(false);
   const [currentDate, setCurrentDate] = useState(new Date());
   
-  // Default tab handling
-  const [activeTab, setActiveTab] = useState<'calendar' | 'tasks' | 'settings' | 'chat'>('calendar');
+  const [activeTab, setActiveTab] = useState<'calendar' | 'tasks' | 'settings' | 'chat'>('chat');
 
   const brainRef = useRef<ChronosBrain | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -66,7 +66,6 @@ function ChronosAppContent() {
 
   const isToday = isSameDay(currentDate, new Date());
 
-  // Restore chat or auto-clear if new day
   useEffect(() => {
     const lastSessionDate = localStorage.getItem('last_session_date');
     const todayStr = format(new Date(), 'yyyy-MM-dd');
@@ -83,6 +82,14 @@ function ChronosAppContent() {
         } catch (e) {
           console.error("Failed to restore chat history", e);
         }
+      } else {
+        const welcome: ChatMessage = {
+          id: 'welcome',
+          role: 'assistant',
+          content: "Hello! I'm Chronos AI. I can help you manage your calendar, create tasks, or clear your schedule for the day. What's on your mind?",
+          timestamp: new Date()
+        };
+        setMessages([welcome]);
       }
     }
     localStorage.setItem('last_session_date', todayStr);
@@ -185,13 +192,11 @@ function ChronosAppContent() {
     }
   }, [inputText, messages, session, refreshData]);
 
-  // Deep-linking and Siri logic: Ensure the AI chat tab is selected when triggered via Siri or direct AI deep-link
   useEffect(() => {
     const siri = searchParams.get('siri');
     const text = searchParams.get('text');
     const rid = searchParams.get('rid');
 
-    // CRITICAL: If siri is present, we MUST switch to the AI chat tab immediately
     if (siri === '1') {
       setActiveTab('chat');
     }
@@ -200,7 +205,6 @@ function ChronosAppContent() {
       lastProcessedRid.current = rid;
       handleSendMessage(text, false, false, 'siri');
       
-      // Clean up URL parameters after processing, but preserve tab state
       const url = new URL(window.location.href);
       url.searchParams.delete('siri');
       url.searchParams.delete('text');
@@ -218,7 +222,13 @@ function ChronosAppContent() {
   }, [messages]);
 
   const resetChat = () => {
-    setMessages([]);
+    const welcome: ChatMessage = {
+      id: Date.now().toString(),
+      role: 'assistant',
+      content: "Resetting our conversation. How can I help you with your schedule now?",
+      timestamp: new Date()
+    };
+    setMessages([welcome]);
     localStorage.removeItem('chronos_chat_history');
   };
 
@@ -300,9 +310,9 @@ function ChronosAppContent() {
           <span className="font-bold text-xl tracking-tight">Chronos AI</span>
         </div>
         <nav className="flex-1 space-y-1">
+          <SidebarItem icon={<CpuChipIcon className="w-6 h-6" />} label="AI Assistant" active={activeTab === 'chat'} onClick={() => setActiveTab('chat')} />
           <SidebarItem icon={<Squares2X2Icon className="w-6 h-6" />} label="Schedule" active={activeTab === 'calendar'} onClick={() => setActiveTab('calendar')} />
           <SidebarItem icon={<ListBulletIcon className="w-6 h-6" />} label="Tasks" active={activeTab === 'tasks'} onClick={() => setActiveTab('tasks')} />
-          <SidebarItem icon={<CpuChipIcon className="w-6 h-6" />} label="AI Assistant" active={activeTab === 'chat'} onClick={() => setActiveTab('chat')} />
           <SidebarItem icon={<Cog6ToothIcon className="w-6 h-6" />} label="Account" active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
         </nav>
       </aside>
@@ -310,7 +320,10 @@ function ChronosAppContent() {
       <div className="flex-1 flex flex-col min-0 h-full overflow-hidden pb-16 lg:pb-0">
         <header className="h-16 lg:h-20 flex items-center justify-between px-4 lg:px-8 bg-white border-b border-slate-200">
           <div className="flex items-center gap-2 lg:gap-6">
-             <button onClick={() => setCurrentDate(new Date())} className="px-3 py-1 text-xs font-bold bg-slate-100 text-slate-600 rounded-lg">Today</button>
+             {/* FIX: Today button should only exist in top left on Schedule or Task page */}
+             {(activeTab === 'calendar' || activeTab === 'tasks') && (
+               <button onClick={() => setCurrentDate(new Date())} className="px-3 py-1 text-xs font-bold bg-slate-100 text-slate-600 rounded-lg">Today</button>
+             )}
              <h2 className="text-lg lg:text-2xl font-black tracking-tight">{format(currentDate, 'MMMM yyyy')}</h2>
           </div>
           <button onClick={refreshData} className="p-2 hover:bg-slate-100 rounded-xl">
@@ -322,12 +335,23 @@ function ChronosAppContent() {
           {(activeTab === 'calendar' || activeTab === 'tasks') && (
             <div className="flex-1 bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden flex flex-col min-h-0 animate-in fade-in slide-in-from-bottom-4 duration-300">
               <div className="flex items-center justify-between py-6 px-4 border-b border-slate-100 bg-white">
-                <button onClick={() => setCurrentDate(prev => addDays(prev, -1))} className="p-2 hover:bg-slate-100 rounded-xl"><ChevronLeftIcon className="w-6 h-6" /></button>
-                <div className="text-center">
+                <div className="w-10">
+                  {/* FIX: Backward arrow should not exist when on current day view */}
+                  {!isToday && (
+                    <button onClick={() => setCurrentDate(prev => addDays(prev, -1))} className="p-2 hover:bg-slate-100 rounded-xl">
+                      <ChevronLeftIcon className="w-6 h-6" />
+                    </button>
+                  )}
+                </div>
+                <div className="text-center flex-1">
                   <span className={cn("text-[10px] font-black uppercase tracking-widest", isToday ? "text-blue-600" : "text-slate-400")}>{isToday ? "TODAY" : "SELECTED"}</span>
                   <h3 className="text-2xl font-black leading-none">{format(currentDate, 'EEEE')}</h3>
                 </div>
-                <button onClick={() => setCurrentDate(prev => addDays(prev, 1))} className="p-2 hover:bg-slate-100 rounded-xl"><ChevronRightIcon className="w-6 h-6" /></button>
+                <div className="w-10 flex justify-end">
+                  <button onClick={() => setCurrentDate(prev => addDays(prev, 1))} className="p-2 hover:bg-slate-100 rounded-xl">
+                    <ChevronRightIcon className="w-6 h-6" />
+                  </button>
+                </div>
               </div>
 
               <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar overscroll-contain">
@@ -368,7 +392,10 @@ function ChronosAppContent() {
         </main>
       </div>
 
-      <div className="hidden lg:flex w-[400px] bg-white border-l border-slate-200 flex-col shadow-2xl z-20 h-full">
+      <div className={cn(
+        "hidden w-[400px] bg-white border-l border-slate-200 flex-col shadow-2xl z-20 h-full transition-all duration-300",
+        activeTab === 'chat' ? "lg:hidden" : "lg:flex"
+      )}>
         <header className="h-20 flex items-center px-8 border-b border-slate-100 justify-between">
           <h3 className="font-black text-xl">Assistant</h3>
           <button onClick={resetChat} className="p-2 hover:bg-slate-100 rounded-xl"><ArrowUturnLeftIcon className="w-5 h-5" /></button>
@@ -380,9 +407,9 @@ function ChronosAppContent() {
       </div>
 
       <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 flex items-center justify-around h-16 z-50">
+         <MobileNavItem icon={<CpuChipIcon className="w-7 h-7"/>} active={activeTab === 'chat'} onClick={() => setActiveTab('chat')} label="AI" />
          <MobileNavItem icon={<Squares2X2Icon className="w-6 h-6"/>} active={activeTab === 'calendar'} onClick={() => setActiveTab('calendar')} label="Daily" />
          <MobileNavItem icon={<ListBulletIcon className="w-6 h-6"/>} active={activeTab === 'tasks'} onClick={() => setActiveTab('tasks')} label="Tasks" />
-         <MobileNavItem icon={<CpuChipIcon className="w-7 h-7"/>} active={activeTab === 'chat'} onClick={() => setActiveTab('chat')} label="AI" />
          <MobileNavItem icon={<Cog6ToothIcon className="w-6 h-6"/>} active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} label="Account" />
       </nav>
     </div>
