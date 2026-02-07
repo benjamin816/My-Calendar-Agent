@@ -1,4 +1,3 @@
-
 import { CalendarEvent, CalendarTask } from '../types';
 
 const BASE_URL = 'https://www.googleapis.com/calendar/v3';
@@ -106,7 +105,19 @@ export const calendarService = {
       timeZone: TIMEZONE,
     });
     const data = await calendarFetch(`/calendars/primary/events?${params}`, token);
-    return (data.items || []).map((item: any) => ({
+    
+    // Filter out events where the current user (self) has declined the invitation
+    const filteredItems = (data.items || []).filter((item: any) => {
+      if (item.attendees) {
+        const selfAttendee = item.attendees.find((a: any) => a.self);
+        if (selfAttendee && selfAttendee.responseStatus === 'declined') {
+          return false;
+        }
+      }
+      return true;
+    });
+
+    return filteredItems.map((item: any) => ({
       id: item.id,
       summary: item.summary || '(No Title)',
       description: item.description,
