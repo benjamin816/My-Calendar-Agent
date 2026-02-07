@@ -1,8 +1,9 @@
 
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react';
 import { useSession, signIn, signOut } from "next-auth/react";
+import { useSearchParams } from 'next/navigation';
 import { CalendarEvent, CalendarTask, ChatMessage } from '../types';
 import { calendarService, setCalendarToken } from '../services/calendar';
 import { ChronosBrain, decodeAudio, playPcmAudio } from '../services/gemini.client';
@@ -44,8 +45,9 @@ const subDaysHelper = (date: Date | number, amount: number): Date => {
   return addDays(date, -amount);
 };
 
-export default function ChronosApp() {
+function ChronosAppContent() {
   const { data: session, status } = useSession();
+  const searchParams = useSearchParams();
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [tasks, setTasks] = useState<CalendarTask[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -58,6 +60,7 @@ export default function ChronosApp() {
   const brainRef = useRef<ChronosBrain | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
+  const lastProcessedRid = useRef<string | null>(null);
 
   const isToday = isSameDay(currentDate, new Date());
 
@@ -111,7 +114,25 @@ export default function ChronosApp() {
     }
   }, []);
 
-  const handleSendMessage = async (text?: string, voice: boolean = false, confirmed: boolean = false, source: 'web' | 'siri' = 'web') => {
+  const refreshData = useCallback(async () => {
+    if (!session?.accessToken) return;
+    try {
+      setCalendarToken(session.accessToken as string);
+      const timeMin = startOfDayHelper(addDays(currentDate, -7)).toISOString();
+      const timeMax = endOfDay(addDays(currentDate, 14)).toISOString();
+      const [evs, tks] = await Promise.all([
+        calendarService.getEvents(timeMin, timeMax, session.accessToken as string),
+        calendarService.getTasks(session.accessToken as string)
+      ]);
+      setEvents(evs);
+      setTasks(tks);
+    } catch (e: any) {
+      console.error("Data refresh failed:", e);
+      if (e.message === 'AUTH_EXPIRED') signIn('google');
+    }
+  }, [session, currentDate]);
+
+  const handleSendMessage = useCallback(async (text?: string, voice: boolean = false, confirmed: boolean = false, source: 'web' | 'siri' = 'web') => {
     const msg = text || inputText;
     if (!msg.trim() && !confirmed) return;
 
@@ -154,8 +175,7 @@ export default function ChronosApp() {
           ui: result.ui
         };
         setMessages(prev => {
-          // Mark the trigger message as processed if it was a siri message
-          return prev.map(m => m.id === currentHistory[currentHistory.length-1].id ? { ...m, processed: true } : m).concat(assistantMsg);
+          return prev.map(m => (m.role === 'user' && m.content === msg) ? { ...m, processed: true } : m).concat(assistantMsg);
         });
         if (voice && result.text) {
           const audioBase64 = await brainRef.current?.generateSpeech(result.text);
@@ -169,16 +189,36 @@ export default function ChronosApp() {
       setIsProcessing(false);
       refreshData();
     }
-  };
+  }, [inputText, messages, session, refreshData]);
 
-  // Poll for Siri messages
+  // Handle incoming Siri Shortcut parameters (siri=1, text=..., rid=...)
+  useEffect(() => {
+    const siri = searchParams.get('siri');
+    const text = searchParams.get('text');
+    const rid = searchParams.get('rid');
+
+    if (siri === '1' && text && rid && rid !== lastProcessedRid.current) {
+      lastProcessedRid.current = rid;
+      
+      // Immediately trigger processing via query params
+      handleSendMessage(text, false, false, 'siri');
+      
+      // Cleanup URL params without navigation to prevent re-runs on browser back/refresh
+      const url = new URL(window.location.href);
+      url.searchParams.delete('siri');
+      url.searchParams.delete('text');
+      url.searchParams.delete('rid');
+      window.history.replaceState({}, '', url.toString());
+    }
+  }, [searchParams, handleSendMessage]);
+
+  // Poll for Siri background messages (fallback method)
   const checkSiriMessages = useCallback(async () => {
     if (status !== 'authenticated' || isProcessing) return;
     try {
       const res = await fetch('/api/siri/pending');
       const data = await res.json();
       if (data.messages && data.messages.length > 0) {
-        // Process each message sequentially
         for (const msg of data.messages) {
           await handleSendMessage(msg.text, false, false, 'siri');
         }
@@ -195,24 +235,6 @@ export default function ChronosApp() {
       return () => clearInterval(interval);
     }
   }, [status, checkSiriMessages]);
-
-  const refreshData = useCallback(async () => {
-    if (!session?.accessToken) return;
-    try {
-      setCalendarToken(session.accessToken as string);
-      const timeMin = startOfDayHelper(addDays(currentDate, -7)).toISOString();
-      const timeMax = endOfDay(addDays(currentDate, 14)).toISOString();
-      const [evs, tks] = await Promise.all([
-        calendarService.getEvents(timeMin, timeMax, session.accessToken as string),
-        calendarService.getTasks(session.accessToken as string)
-      ]);
-      setEvents(evs);
-      setTasks(tks);
-    } catch (e: any) {
-      console.error("Data refresh failed:", e);
-      if (e.message === 'AUTH_EXPIRED') signIn('google');
-    }
-  }, [session, currentDate]);
 
   useEffect(() => {
     if (status === 'authenticated') refreshData();
@@ -528,6 +550,15 @@ export default function ChronosApp() {
          <MobileNavItem icon={<Cog6ToothIcon className="w-6 h-6"/>} active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} label="Account" />
       </nav>
     </div>
+  );
+}
+
+// Wrapper to provide Suspense boundary for useSearchParams
+export default function ChronosApp() {
+  return (
+    <Suspense fallback={<div className="h-[100dvh] bg-[#f8fafc]" />}>
+      <ChronosAppContent />
+    </Suspense>
   );
 }
 
