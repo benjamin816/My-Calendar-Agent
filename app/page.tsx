@@ -5,7 +5,7 @@ import { useSession, signIn, signOut } from "next-auth/react";
 import { CalendarEvent, CalendarTask, ChatMessage } from '../types';
 import { calendarService, setCalendarToken } from '../services/calendar';
 import { ChronosBrain, decodeAudio, playPcmAudio } from '../services/gemini.client';
-import { format, eachDayOfInterval, addDays, isSameDay, parseISO, addMinutes, startOfDay, endOfDay, subDays } from 'date-fns';
+import { format, eachDayOfInterval, addDays, isSameDay, parseISO, addMinutes, startOfDay, endOfDay, subDays, isAfter } from 'date-fns';
 import { 
   ChatBubbleLeftRightIcon, 
   MicrophoneIcon, 
@@ -46,6 +46,9 @@ export default function ChronosApp() {
   const brainRef = useRef<ChronosBrain | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
+
+  const isToday = isSameDay(currentDate, new Date());
+  const canGoBack = isAfter(startOfDay(currentDate), startOfDay(new Date()));
 
   // Set AI tab as default on mobile on initial load
   useEffect(() => {
@@ -277,7 +280,9 @@ export default function ChronosApp() {
         <main className="flex-1 overflow-hidden p-3 lg:p-6 flex flex-col min-h-0">
           {activeTab === 'calendar' && (
             <div className="flex-1 bg-white rounded-[2rem] lg:rounded-3xl border border-slate-200 shadow-sm overflow-hidden flex flex-col min-h-0">
-              <div className="grid grid-cols-3 border-b border-slate-100 bg-slate-50/30 flex-shrink-0">
+              
+              {/* Desktop 3-Day Header */}
+              <div className="hidden lg:grid grid-cols-3 border-b border-slate-100 bg-slate-50/30 flex-shrink-0">
                 {displayDays.map(day => (
                   <div key={day.toISOString()} className="flex flex-col items-center justify-center py-2 lg:py-4 border-l first:border-l-0 border-slate-100">
                     <span className="text-[8px] lg:text-[10px] font-bold text-slate-400 uppercase tracking-widest">{format(day, 'EEE')}</span>
@@ -287,6 +292,47 @@ export default function ChronosApp() {
                   </div>
                 ))}
               </div>
+
+              {/* Mobile Banner Header */}
+              <div className="lg:hidden flex flex-col items-center justify-center py-6 px-4 border-b border-slate-100 bg-white flex-shrink-0">
+                <div className="flex items-center justify-between w-full max-w-sm">
+                  <div className="w-10">
+                    {canGoBack && (
+                      <button 
+                        onClick={() => setCurrentDate(prev => addDays(prev, -1))} 
+                        className="p-2.5 bg-slate-50 text-slate-500 rounded-2xl hover:bg-slate-100 transition-all active:scale-90"
+                      >
+                        <ChevronLeftIcon className="w-5 h-5" />
+                      </button>
+                    )}
+                  </div>
+                  
+                  <div className="flex flex-col items-center text-center">
+                    <span className={cn(
+                      "text-[10px] font-black uppercase tracking-[0.2em] mb-1.5",
+                      isToday ? "text-blue-600" : "text-slate-400"
+                    )}>
+                      {isToday ? "TODAY" : "UPCOMING"}
+                    </span>
+                    <h3 className="text-3xl font-black text-slate-900 tracking-tighter leading-none">
+                      {format(currentDate, 'EEEE')}
+                    </h3>
+                    <p className="text-sm font-bold text-slate-400 mt-1 uppercase tracking-widest">
+                      {format(currentDate, 'MMMM d')}
+                    </p>
+                  </div>
+
+                  <div className="w-10 flex justify-end">
+                    <button 
+                      onClick={() => setCurrentDate(prev => addDays(prev, 1))} 
+                      className="p-2.5 bg-slate-50 text-slate-500 rounded-2xl hover:bg-slate-100 transition-all active:scale-90"
+                    >
+                      <ChevronRightIcon className="w-5 h-5" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+
               <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 overflow-hidden min-h-0">
                 {/* Mobile: Single-column events scrollable area */}
                 <div className="lg:hidden flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar bg-white overscroll-contain">
