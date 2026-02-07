@@ -3,11 +3,10 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react';
 import { useSession, signIn, signOut } from "next-auth/react";
-import { useSearchParams, useRouter } from 'navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { CalendarEvent, CalendarTask, ChatMessage } from '../../types';
 import { calendarService, setCalendarToken } from '../../services/calendar';
 import { ChronosBrain, decodeAudio, playPcmAudio } from '../../services/gemini.client';
-// Fix: Remove unused and potentially missing parseISO import from date-fns
 import { format, addDays, isSameDay, endOfDay } from 'date-fns';
 import { 
   MicrophoneIcon, 
