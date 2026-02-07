@@ -48,7 +48,6 @@ export default function ChronosApp() {
   const recognitionRef = useRef<any>(null);
 
   const isToday = isSameDay(currentDate, new Date());
-  const canGoBack = isAfter(startOfDay(currentDate), startOfDay(new Date()));
 
   // Set AI tab as default on mobile on initial load
   useEffect(() => {
@@ -266,9 +265,9 @@ export default function ChronosApp() {
         <header className="h-16 lg:h-20 flex items-center justify-between px-4 lg:px-8 bg-white border-b border-slate-200 flex-shrink-0">
           <div className="flex items-center gap-2 lg:gap-6">
              <div className="flex items-center gap-1 lg:gap-2">
-                <button onClick={() => setCurrentDate(prev => addDays(prev, -1))} className="p-1.5 lg:p-2 hover:bg-slate-100 rounded-xl text-slate-400 transition-colors"><ChevronLeftIcon className="w-4 h-4 lg:w-5 lg:h-5"/></button>
+                <button onClick={() => setCurrentDate(prev => addDays(prev, -1))} className="p-1.5 lg:p-2 hover:bg-slate-100 rounded-xl text-slate-400 transition-colors hidden lg:flex"><ChevronLeftIcon className="w-4 h-4 lg:w-5 lg:h-5"/></button>
                 <button onClick={() => setCurrentDate(new Date())} className="px-2 lg:px-4 py-1 lg:py-1.5 text-[10px] lg:text-xs font-bold bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-colors">Today</button>
-                <button onClick={() => setCurrentDate(prev => addDays(prev, 1))} className="p-1.5 lg:p-2 hover:bg-slate-100 rounded-xl text-slate-400 transition-colors"><ChevronRightIcon className="w-4 h-4 lg:w-5 lg:h-5"/></button>
+                <button onClick={() => setCurrentDate(prev => addDays(prev, 1))} className="p-1.5 lg:p-2 hover:bg-slate-100 rounded-xl text-slate-400 transition-colors hidden lg:flex"><ChevronRightIcon className="w-4 h-4 lg:w-5 lg:h-5"/></button>
              </div>
              <h2 className="text-sm lg:text-2xl font-black tracking-tight text-slate-900 truncate max-w-[120px] lg:max-w-none">{format(currentDate, 'MMMM yyyy')}</h2>
           </div>
@@ -293,43 +292,21 @@ export default function ChronosApp() {
                 ))}
               </div>
 
-              {/* Mobile Banner Header */}
+              {/* Mobile Banner Header (No Arrows) */}
               <div className="lg:hidden flex flex-col items-center justify-center py-6 px-4 border-b border-slate-100 bg-white flex-shrink-0">
-                <div className="flex items-center justify-between w-full max-w-sm">
-                  <div className="w-10">
-                    {canGoBack && (
-                      <button 
-                        onClick={() => setCurrentDate(prev => addDays(prev, -1))} 
-                        className="p-2.5 bg-slate-50 text-slate-500 rounded-2xl hover:bg-slate-100 transition-all active:scale-90"
-                      >
-                        <ChevronLeftIcon className="w-5 h-5" />
-                      </button>
-                    )}
-                  </div>
-                  
-                  <div className="flex flex-col items-center text-center">
-                    <span className={cn(
-                      "text-[10px] font-black uppercase tracking-[0.2em] mb-1.5",
-                      isToday ? "text-blue-600" : "text-slate-400"
-                    )}>
-                      {isToday ? "TODAY" : "UPCOMING"}
-                    </span>
-                    <h3 className="text-3xl font-black text-slate-900 tracking-tighter leading-none">
-                      {format(currentDate, 'EEEE')}
-                    </h3>
-                    <p className="text-sm font-bold text-slate-400 mt-1 uppercase tracking-widest">
-                      {format(currentDate, 'MMMM d')}
-                    </p>
-                  </div>
-
-                  <div className="w-10 flex justify-end">
-                    <button 
-                      onClick={() => setCurrentDate(prev => addDays(prev, 1))} 
-                      className="p-2.5 bg-slate-50 text-slate-500 rounded-2xl hover:bg-slate-100 transition-all active:scale-90"
-                    >
-                      <ChevronRightIcon className="w-5 h-5" />
-                    </button>
-                  </div>
+                <div className="flex flex-col items-center text-center">
+                  <span className={cn(
+                    "text-[10px] font-black uppercase tracking-[0.2em] mb-1.5",
+                    isToday ? "text-blue-600" : "text-slate-400"
+                  )}>
+                    {isToday ? "TODAY" : "SELECTED"}
+                  </span>
+                  <h3 className="text-3xl font-black text-slate-900 tracking-tighter leading-none">
+                    {format(currentDate, 'EEEE')}
+                  </h3>
+                  <p className="text-sm font-bold text-slate-400 mt-1 uppercase tracking-widest">
+                    {format(currentDate, 'MMMM d')}
+                  </p>
                 </div>
               </div>
 
