@@ -49,7 +49,6 @@ export default function ChronosApp() {
   const recognitionRef = useRef<any>(null);
 
   const isToday = isSameDay(currentDate, new Date());
-  const canGoBack = true; // Allow navigating back for history
 
   // Auto-clear chat history if it's a new day
   useEffect(() => {
@@ -235,7 +234,11 @@ export default function ChronosApp() {
   const getTasksForDay = (day: Date) => {
     return tasks.filter(t => {
       if (!t.due) return false;
-      return isSameDay(parseISO(t.due), day);
+      // Google Tasks 'due' is usually ISO like '2025-05-20T00:00:00.000Z'
+      // We must compare only the YYYY-MM-DD part to avoid timezone shifts showing tomorrow's tasks today.
+      const taskDatePart = t.due.split('T')[0];
+      const targetDatePart = format(day, 'yyyy-MM-dd');
+      return taskDatePart === targetDatePart;
     });
   };
 
@@ -318,11 +321,9 @@ export default function ChronosApp() {
         <header className="h-16 lg:h-20 flex items-center justify-between px-4 lg:px-8 bg-white border-b border-slate-200 flex-shrink-0">
           <div className="flex items-center gap-2 lg:gap-6">
              <div className="flex items-center gap-1 lg:gap-2">
-                <button onClick={() => setCurrentDate(prev => addDays(prev, -1))} className="p-1.5 lg:p-2 hover:bg-slate-100 rounded-xl text-slate-400 transition-colors"><ChevronLeftIcon className="w-4 h-4 lg:w-5 lg:h-5"/></button>
                 <button onClick={() => setCurrentDate(new Date())} className="px-2 lg:px-4 py-1 lg:py-1.5 text-[10px] lg:text-xs font-bold bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-colors">Today</button>
-                <button onClick={() => setCurrentDate(prev => addDays(prev, 1))} className="p-1.5 lg:p-2 hover:bg-slate-100 rounded-xl text-slate-400 transition-colors"><ChevronRightIcon className="w-4 h-4 lg:w-5 lg:h-5"/></button>
              </div>
-             <h2 className="text-sm lg:text-2xl font-black tracking-tight text-slate-900 truncate max-w-[120px] lg:max-w-none">{format(currentDate, 'MMMM yyyy')}</h2>
+             <h2 className="text-sm lg:text-2xl font-black tracking-tight text-slate-900 truncate max-w-[150px] lg:max-w-none">{format(currentDate, 'MMMM yyyy')}</h2>
           </div>
           <button onClick={refreshData} className="p-2 lg:p-2.5 hover:bg-slate-100 rounded-xl text-slate-500 transition-all active:rotate-180">
             <ArrowPathIcon className={cn("w-4 h-4 lg:w-5 lg:h-5", isProcessing && "animate-spin")} />
@@ -333,7 +334,38 @@ export default function ChronosApp() {
           {(activeTab === 'calendar' || activeTab === 'tasks') && (
             <div className="flex-1 bg-white rounded-[2rem] lg:rounded-3xl border border-slate-200 shadow-sm overflow-hidden flex flex-col min-h-0">
               
-              {/* Desktop Header */}
+              {/* The Large Banner (Primary Navigation) */}
+              <div className="flex items-center justify-between py-6 lg:py-10 px-4 lg:px-12 border-b border-slate-100 bg-white flex-shrink-0">
+                <div className="w-12 lg:w-20 flex justify-center">
+                  {!isToday && (
+                    <button 
+                      onClick={() => setCurrentDate(prev => addDays(prev, -1))} 
+                      className="p-2 lg:p-4 hover:bg-slate-100 rounded-2xl text-slate-400 hover:text-blue-600 transition-all active:scale-90"
+                    >
+                      <ChevronLeftIcon className="w-6 h-6 lg:w-10 lg:h-10" />
+                    </button>
+                  )}
+                </div>
+                
+                <div className="flex flex-col items-center text-center flex-1 min-w-0 px-2">
+                  <span className={cn("text-[10px] lg:text-xs font-black uppercase tracking-[0.2em] mb-1 lg:mb-2", isToday ? "text-blue-600" : "text-slate-400")}>
+                    {isToday ? "TODAY" : "SELECTED"}
+                  </span>
+                  <h3 className="text-2xl lg:text-5xl font-black text-slate-900 tracking-tighter leading-none truncate w-full">{format(currentDate, 'EEEE')}</h3>
+                  <p className="text-[11px] lg:text-lg font-bold text-slate-400 mt-0.5 lg:mt-2 uppercase tracking-widest truncate w-full">{format(currentDate, 'MMMM d')}</p>
+                </div>
+
+                <div className="w-12 lg:w-20 flex justify-center">
+                  <button 
+                    onClick={() => setCurrentDate(prev => addDays(prev, 1))} 
+                    className="p-2 lg:p-4 hover:bg-slate-100 rounded-2xl text-slate-400 hover:text-blue-600 transition-all active:scale-90"
+                  >
+                    <ChevronRightIcon className="w-6 h-6 lg:w-10 lg:h-10" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Desktop Header Grid */}
               <div className="hidden lg:grid grid-cols-3 border-b border-slate-100 bg-slate-50/30 flex-shrink-0">
                 {displayDays.map(day => (
                   <div key={day.toISOString()} className="flex flex-col items-center justify-center py-4 border-l first:border-l-0 border-slate-100">
@@ -343,17 +375,6 @@ export default function ChronosApp() {
                     </div>
                   </div>
                 ))}
-              </div>
-
-              {/* Mobile Header */}
-              <div className="lg:hidden flex flex-col items-center justify-center py-6 px-4 border-b border-slate-100 bg-white flex-shrink-0">
-                <div className="flex flex-col items-center text-center">
-                  <span className={cn("text-[10px] font-black uppercase tracking-[0.2em] mb-1.5", isToday ? "text-blue-600" : "text-slate-400")}>
-                    {isToday ? "TODAY" : "SELECTED"}
-                  </span>
-                  <h3 className="text-3xl font-black text-slate-900 tracking-tighter leading-none">{format(currentDate, 'EEEE')}</h3>
-                  <p className="text-sm font-bold text-slate-400 mt-1 uppercase tracking-widest">{format(currentDate, 'MMMM d')}</p>
-                </div>
               </div>
 
               <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 overflow-hidden min-h-0">
@@ -541,7 +562,7 @@ function ChatInterface({
         {messages.length === 0 && (
            <div className="h-full flex flex-col items-center justify-center text-center p-8 space-y-4 opacity-40">
               <ChatBubbleLeftRightIcon className="w-12 h-12 text-slate-300" />
-              <p className="text-slate-400 font-bold text-sm lg:text-base italic">Ask me to "Schedule coffee tomorrow" or "Remind me to buy milk"</p>
+              <p className="text-slate-400 font-bold text-sm lg:text-base italic">Ask me to \"Schedule coffee tomorrow\" or \"Remind me to buy milk\"</p>
            </div>
         )}
         {messages.map((m: ChatMessage) => (
