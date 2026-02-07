@@ -1,4 +1,3 @@
-
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react';
@@ -202,12 +201,23 @@ function ChronosAppContent() {
             <div className="flex-1 bg-white rounded-[2.5rem] border border-slate-200 shadow-xl shadow-slate-200/50 overflow-hidden flex flex-col animate-in fade-in slide-in-from-bottom-4 duration-500">
               {/* Date Navigation */}
               <div className="flex items-center justify-between p-8 border-b border-slate-100">
-                <button onClick={() => setCurrentDate(d => addDays(d, -1))} className="p-3 hover:bg-slate-50 rounded-2xl border border-slate-100 transition-all"><ChevronLeftIcon className="w-6 h-6" /></button>
+                {/* Remove previous day arrow when on current day */}
+                {!isToday ? (
+                  <button onClick={() => setCurrentDate(d => addDays(d, -1))} className="p-3 hover:bg-slate-50 rounded-2xl border border-slate-100 transition-all">
+                    <ChevronLeftIcon className="w-6 h-6" />
+                  </button>
+                ) : (
+                  <div className="w-12 h-12" aria-hidden="true" />
+                )}
+                
                 <div className="text-center">
                   <p className="text-4xl font-black text-slate-900 tracking-tighter">{format(currentDate, 'd')}</p>
                   <p className={cn("text-[10px] font-black uppercase tracking-[0.3em]", isToday ? "text-blue-600" : "text-slate-400")}>{format(currentDate, 'EEEE')}</p>
                 </div>
-                <button onClick={() => setCurrentDate(d => addDays(d, 1))} className="p-3 hover:bg-slate-50 rounded-2xl border border-slate-100 transition-all"><ChevronRightIcon className="w-6 h-6" /></button>
+                
+                <button onClick={() => setCurrentDate(d => addDays(d, 1))} className="p-3 hover:bg-slate-50 rounded-2xl border border-slate-100 transition-all">
+                  <ChevronRightIcon className="w-6 h-6" />
+                </button>
               </div>
 
               {/* Day Scroll Content */}
