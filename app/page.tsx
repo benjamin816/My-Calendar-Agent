@@ -1,20 +1,28 @@
 
 "use client";
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useSession, signIn } from "next-auth/react";
-import Link from 'next/link';
-import { SparklesIcon, ArrowRightIcon } from '@heroicons/react/24/outline';
+import { useRouter } from 'next/navigation';
+import { SparklesIcon } from '@heroicons/react/24/outline';
 
 export default function LandingPage() {
   const { data: session, status } = useSession();
+  const router = useRouter();
 
-  if (status === "loading") {
+  // Automatically redirect to /ai if authenticated
+  useEffect(() => {
+    if (status === "authenticated") {
+      router.replace('/ai');
+    }
+  }, [status, router]);
+
+  if (status === "loading" || status === "authenticated") {
     return (
       <div className="h-[100dvh] flex items-center justify-center bg-[#f8fafc]">
         <div className="flex flex-col items-center gap-4">
           <SparklesIcon className="w-12 h-12 text-blue-600 animate-bounce" />
-          <p className="text-slate-500 font-bold">Initializing...</p>
+          <p className="text-slate-500 font-bold">Redirecting to Chronos...</p>
         </div>
       </div>
     );
@@ -31,22 +39,12 @@ export default function LandingPage() {
         </div>
 
         <div className="space-y-4">
-          {session ? (
-            <Link 
-              href="/ai" 
-              className="w-full bg-blue-600 text-white py-4 px-6 rounded-2xl font-bold hover:bg-blue-700 transition-all flex items-center justify-center gap-3 shadow-lg active:scale-95"
-            >
-              <span>Go to Assistant</span>
-              <ArrowRightIcon className="w-5 h-5" />
-            </Link>
-          ) : (
-            <button 
-              onClick={() => signIn('google')} 
-              className="w-full bg-slate-900 text-white py-4 px-6 rounded-2xl font-bold hover:bg-slate-800 transition-all flex items-center justify-center gap-3 shadow-lg active:scale-95"
-            >
-              Get Started with Google
-            </button>
-          )}
+          <button 
+            onClick={() => signIn('google')} 
+            className="w-full bg-slate-900 text-white py-4 px-6 rounded-2xl font-bold hover:bg-slate-800 transition-all flex items-center justify-center gap-3 shadow-lg active:scale-95"
+          >
+            Sign in with Google
+          </button>
           
           <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
             Powered by Google Calendar & Gemini
