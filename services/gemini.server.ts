@@ -1,50 +1,40 @@
+
 import { GoogleGenAI, Type, FunctionDeclaration, Modality, Part, GenerateContentResponse } from "@google/genai";
 import { calendarService } from "./calendar";
 
 const calendarTools: FunctionDeclaration[] = [
   {
     name: "list_events",
-    description: "Search or list calendar events. Use timeMin and timeMax to filter.",
+    description: "Search or list calendar events. Use timeMin and timeMax (ISO RFC3339) to narrow down results. Useful for viewing the schedule.",
     parameters: {
       type: Type.OBJECT,
       properties: {
-        timeMin: { type: Type.STRING, description: "ISO RFC3339 string start time." },
-        timeMax: { type: Type.STRING, description: "ISO RFC3339 string end time." }
+        timeMin: { type: Type.STRING, description: "Lower bound for an event's end time (ISO 8601)." },
+        timeMax: { type: Type.STRING, description: "Upper bound for an event's start time (ISO 8601)." }
       }
     }
   },
   {
-    name: "clear_day",
-    description: "Delete all single-day events on a specific day. Multi-day events are PRESERVED.",
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        date: { type: Type.STRING, description: "The date to clear in YYYY-MM-DD format." }
-      },
-      required: ["date"]
-    }
-  },
-  {
     name: "create_event",
-    description: "Create a new calendar event.",
+    description: "Create a new event in the user's primary calendar.",
     parameters: {
       type: Type.OBJECT,
       properties: {
-        summary: { type: Type.STRING, description: "Event title" },
-        start: { type: Type.STRING, description: "Start time (local ISO YYYY-MM-DDTHH:mm:ss)" },
-        end: { type: Type.STRING, description: "End time (local ISO YYYY-MM-DDTHH:mm:ss)" },
-        description: { type: Type.STRING }
+        summary: { type: Type.STRING, description: "Title of the event." },
+        start: { type: Type.STRING, description: "Start time (YYYY-MM-DDTHH:mm:ss)." },
+        end: { type: Type.STRING, description: "End time (YYYY-MM-DDTHH:mm:ss)." },
+        description: { type: Type.STRING, description: "Optional description or notes." }
       },
       required: ["summary", "start"]
     }
   },
   {
     name: "update_event",
-    description: "Modify an existing event (extend, shorten, rename). Provide 'id' if known.",
+    description: "Modify an existing calendar event. Only provide fields that need updating.",
     parameters: {
       type: Type.OBJECT,
       properties: {
-        id: { type: Type.STRING, description: "Unique ID of the event." },
+        id: { type: Type.STRING, description: "The unique ID of the event to update." },
         summary: { type: Type.STRING },
         start: { type: Type.STRING },
         end: { type: Type.STRING },
@@ -55,50 +45,66 @@ const calendarTools: FunctionDeclaration[] = [
   },
   {
     name: "delete_event",
-    description: "Remove an event permanently. Verbalize the event name first.",
+    description: "Permanently remove an event from the calendar. Use with caution.",
     parameters: {
       type: Type.OBJECT,
-      properties: { id: { type: Type.STRING } },
+      properties: { 
+        id: { type: Type.STRING, description: "ID of the event to delete." } 
+      },
       required: ["id"]
     }
   },
   {
-    name: "list_tasks",
-    description: "Get user tasks from the default list."
-  },
-  {
-    name: "create_task",
-    description: "Add a new task.",
+    name: "clear_day",
+    description: "Removes all single-day events for a specific date (YYYY-MM-DD). Keeps multi-day events safe.",
     parameters: {
       type: Type.OBJECT,
       properties: {
-        title: { type: Type.STRING },
-        dueDate: { type: Type.STRING, description: "YYYY-MM-DD format" },
-        notes: { type: Type.STRING }
+        date: { type: Type.STRING, description: "The date to clear in YYYY-MM-DD format." }
+      },
+      required: ["date"]
+    }
+  },
+  {
+    name: "list_tasks",
+    description: "Retrieve all tasks from the user's task lists, including completed ones."
+  },
+  {
+    name: "create_task",
+    description: "Add a new task to the default task list.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        title: { type: Type.STRING, description: "The name of the task." },
+        dueDate: { type: Type.STRING, description: "Due date in YYYY-MM-DD format." },
+        notes: { type: Type.STRING, description: "Additional details about the task." }
       },
       required: ["title"]
     }
   },
   {
     name: "update_task",
-    description: "Edit an existing task or mark it as complete. Use completed: true for 'checked off'.",
+    description: "Update task details or mark as complete. Set completed: true to check it off.",
     parameters: {
       type: Type.OBJECT,
       properties: {
-        id: { type: Type.STRING },
+        id: { type: Type.STRING, description: "Unique task ID." },
         title: { type: Type.STRING },
-        completed: { type: Type.BOOLEAN, description: "Whether the task is checked off/finished." },
-        dueDate: { type: Type.STRING, description: "YYYY-MM-DD format" }
+        completed: { type: Type.BOOLEAN, description: "Status of completion." },
+        dueDate: { type: Type.STRING, description: "Due date (YYYY-MM-DD)." },
+        notes: { type: Type.STRING }
       },
       required: ["id"]
     }
   },
   {
     name: "delete_task",
-    description: "Remove/Delete a task permanently. This is different from completing it.",
+    description: "Permanently delete a task. Not the same as completing it.",
     parameters: {
       type: Type.OBJECT,
-      properties: { id: { type: Type.STRING } },
+      properties: { 
+        id: { type: Type.STRING, description: "ID of the task to delete." } 
+      },
       required: ["id"]
     }
   }
@@ -117,37 +123,6 @@ function extractModelText(response: GenerateContentResponse): string {
   return parts.map(p => p.text || '').join('').trim();
 }
 
-async function verifyAction(toolName: string, id: string | null, accessToken: string, date?: string): Promise<boolean> {
-  try {
-    switch (toolName) {
-      case "create_event":
-      case "update_event":
-        if (!id) return false;
-        const events = await calendarService.getEvents(undefined, undefined, accessToken);
-        return !!events.find(e => e.id === id);
-      case "delete_event":
-        if (!id) return false;
-        const all = await calendarService.getEvents(undefined, undefined, accessToken);
-        return !all.find(e => e.id === id);
-      case "clear_day":
-        if (!date) return false;
-        const dayEvs = await calendarService.getEvents(`${date}T00:00:00Z`, `${date}T23:59:59Z`, accessToken);
-        const rangeStart = new Date(`${date}T00:00:00Z`);
-        const rangeEnd = new Date(`${date}T23:59:59Z`);
-        const remainingInDay = dayEvs.filter(ev => {
-          const s = new Date(ev.start);
-          const e = new Date(ev.end);
-          return s >= rangeStart && e <= rangeEnd;
-        });
-        return remainingInDay.length === 0;
-      default:
-        return true;
-    }
-  } catch (e) {
-    return false;
-  }
-}
-
 export async function processChatAction(
   message: string, 
   history: any[], 
@@ -158,9 +133,9 @@ export async function processChatAction(
   const apiKey = process.env.API_KEY;
   if (!apiKey) throw new Error("Missing API_KEY");
 
-  // Siri commands skip initial confirmation UI and force an execution path
   const isSiri = source === 'siri';
 
+  // Handling direct execution for confirmed/Siri actions
   if ((confirmed || isSiri) && message.startsWith("Executing ")) {
     const match = message.match(/Executing (\w+): (.*)/);
     if (match) {
@@ -170,42 +145,23 @@ export async function processChatAction(
       try {
         let result: any;
         switch (toolName) {
-          case "delete_event": 
-            result = await calendarService.deleteEvent(args.id, accessToken); 
-            break;
-          case "delete_task": 
-            result = await calendarService.deleteTask(args.id, accessToken); 
-            break;
+          case "delete_event": result = await calendarService.deleteEvent(args.id, accessToken); break;
+          case "delete_task": result = await calendarService.deleteTask(args.id, accessToken); break;
           case "clear_day":
             const dayEvents = await calendarService.getEvents(`${args.date}T00:00:00Z`, `${args.date}T23:59:59Z`, accessToken);
-            const rangeStart = new Date(`${args.date}T00:00:00Z`);
-            const rangeEnd = new Date(`${args.date}T23:59:59Z`);
-            const eventsToDelete = dayEvents.filter(ev => {
-              const s = new Date(ev.start);
-              const e = new Date(ev.end);
-              return s >= rangeStart && e <= rangeEnd;
-            });
+            const eventsToDelete = dayEvents.filter(ev => !ev.isAllDay);
             for (const ev of eventsToDelete) { await calendarService.deleteEvent(ev.id, accessToken); }
             result = { ok: true, count: eventsToDelete.length };
             break;
-          case "create_event":
-            result = await calendarService.createEvent(args, accessToken);
-            break;
-          case "update_event":
-            result = await calendarService.updateEvent(args.id, args, accessToken);
-            break;
-          case "update_task":
-            result = await calendarService.updateTask(args.id, args, accessToken);
-            break;
-          default:
-            throw new Error(`Tool ${toolName} not supported in confirmation path.`);
+          case "create_event": result = await calendarService.createEvent(args, accessToken); break;
+          case "update_event": result = await calendarService.updateEvent(args.id, args, accessToken); break;
+          case "create_task": result = await calendarService.createTask(args, accessToken); break;
+          case "update_task": result = await calendarService.updateTask(args.id, args, accessToken); break;
+          default: throw new Error(`Tool ${toolName} not supported in direct execution path.`);
         }
-
-        await verifyAction(toolName, result?.id || args.id, accessToken, args.date);
-        const prefix = isSiri ? "(Siri command) " : "";
-        return { text: `${prefix}All set! I've updated your schedule.` };
+        return { text: `Success! I've updated your ${toolName.includes('task') ? 'tasks' : 'calendar'}.` };
       } catch (e: any) {
-        return { text: `Sorry, I hit a snag: ${e.message}` };
+        return { text: `Action failed: ${e.message}` };
       }
     }
   }
@@ -213,24 +169,21 @@ export async function processChatAction(
   const ai = new GoogleGenAI({ apiKey });
   const currentNYTime = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
 
-  const systemInstruction = `You are Chronos AI, a helpful and efficient schedule assistant.
-  Current Time: ${currentNYTime} (America/New_York).
+  const systemInstruction = `You are Chronos AI, an elite scheduling agent.
+  Current Context: ${currentNYTime} (New York).
 
-  STYLE RULES:
-  - Be BRIEF and NATURAL. Avoid robotic or overly formal language.
-  - Use BULLET POINTS when listing more than one event or task.
-  - Responses must be easy to read at a glance.
-  - Keep summaries concise.
+  PRINCIPLES:
+  - Concise & Action-Oriented.
+  - When asked about the schedule, use 'list_events' and 'list_tasks' first.
+  - For deletions or clearing a whole day, ALWAYS ask for confirmation unless from Siri.
+  - Clearly distinguish between "completing" a task and "deleting" it.
+  - Present lists with clear formatting.
+  - If requested to 'edit', first find the item's ID using a list tool.
 
-  ACTION RULES:
-  - TASK COMPLETION VS DELETION: 
-    - Completion: If a user says "finished", "done", or "check off", use update_task(completed: true).
-    - Deletion: If a user says "delete" or "remove", use delete_task.
-    - If it's unclear, ask: "Do you want to mark this as complete or delete it permanently?"
-  - DELETIONS: List the names of the items before asking for confirmation.
-  - CLEAR_DAY: Only delete single-day events. Preserve multi-day events.
-  - Always be specific about which events/tasks you are acting on.
-  ${isSiri ? "- IMPORTANT: You are processing a Siri Shortcut command. Execute actions immediately where possible." : ""}`;
+  TOOL USAGE:
+  - Use 'list_events' for visibility into the calendar.
+  - Use 'list_tasks' for visibility into the task list.
+  - If a user says "I'm done with...", suggest update_task(completed: true).`;
 
   const mappedHistory = history
     .filter(h => h.role === 'user' || h.role === 'assistant')
@@ -240,7 +193,7 @@ export async function processChatAction(
     }));
 
   const chat = ai.chats.create({
-    model: "gemini-3-flash-preview",
+    model: "gemini-3-pro-preview", // Upgraded for better tool precision
     config: {
       systemInstruction,
       tools: [{ functionDeclarations: calendarTools }]
@@ -251,65 +204,37 @@ export async function processChatAction(
   let response = await chat.sendMessage({ message });
 
   let toolRounds = 0;
-  while (response.functionCalls && response.functionCalls.length > 0 && toolRounds < 5) {
+  while (response.functionCalls && response.functionCalls.length > 0 && toolRounds < 6) {
     const parts: Part[] = [];
+    
     for (const call of response.functionCalls) {
-      
-      // Handle confirmation-heavy tools differently for Siri
-      if (isSiri && (call.name === "clear_day" || call.name === "delete_event" || call.name === "delete_task")) {
-        // Force immediate execution for Siri instead of returning a UI confirmation
+      // Force direct execution for risky tools if Siri is the source
+      if (isSiri && ["clear_day", "delete_event", "delete_task"].includes(call.name)) {
         const executionText = `Executing ${call.name}: ${JSON.stringify(call.args)}`;
         return processChatAction(executionText, history, accessToken, true, 'siri');
       }
 
+      // UI Confirmations for destructive actions
       if (call.name === "clear_day") {
-        const evs = await calendarService.getEvents(`${call.args.date}T00:00:00Z`, `${call.args.date}T23:59:59Z`, accessToken);
-        const rangeS = new Date(`${call.args.date}T00:00:00Z`);
-        const rangeE = new Date(`${call.args.date}T23:59:59Z`);
-        const targets = evs.filter(ev => new Date(ev.start) >= rangeS && new Date(ev.end) <= rangeE);
-        const others = evs.length - targets.length;
-        
-        const names = targets.map(t => `"${t.summary}"`).join(", ");
-        const text = targets.length > 0 
-          ? `I'm ready to clear your schedule for ${call.args.date}. I'll remove: ${names}.${others > 0 ? ` I'll keep your ${others} multi-day event(s) safe.` : ''} Ready to go?`
-          : `I didn't find any single-day events to clear on ${call.args.date}${others > 0 ? `, but I'm preserving your ${others} multi-day event(s).` : '.'}`;
-
         return {
-          text,
-          ui: targets.length > 0 ? {
-            type: "confirm",
-            action: "clear_day",
-            pending: { action: "clear_day", args: call.args }
-          } : undefined
+          text: `Are you sure you want to clear your single-day events for ${call.args.date}?`,
+          ui: { type: "confirm", action: "clear_day", pending: { action: "clear_day", args: call.args } }
         };
       }
-
       if (call.name === "delete_event") {
-        const allEvs = await calendarService.getEvents(undefined, undefined, accessToken);
-        const target = allEvs.find(e => e.id === call.args.id);
         return {
-          text: `Ready to delete "${target?.summary || 'this event'}". Sound good?`,
-          ui: {
-            type: "confirm",
-            action: "delete_event",
-            pending: { action: "delete_event", args: call.args }
-          }
+          text: `Confirm deleting this event?`,
+          ui: { type: "confirm", action: "delete_event", pending: { action: "delete_event", args: call.args } }
         };
       }
-
       if (call.name === "delete_task") {
-        const allTasks = await calendarService.getTasks(accessToken);
-        const target = allTasks.find(t => t.id === call.args.id);
         return {
-          text: `Just to be sure, do you want to permanently DELETE "${target?.title || 'this task'}", or just mark it as complete?`,
-          ui: {
-            type: "confirm",
-            action: "delete_task",
-            pending: { action: "delete_task", args: call.args }
-          }
+          text: `Confirm deleting this task permanently?`,
+          ui: { type: "confirm", action: "delete_task", pending: { action: "delete_task", args: call.args } }
         };
       }
 
+      // Execute non-destructive tools immediately
       let result: any;
       try {
         switch (call.name) {
@@ -319,20 +244,20 @@ export async function processChatAction(
           case "list_tasks": result = await calendarService.getTasks(accessToken); break;
           case "create_task": result = await calendarService.createTask(call.args as any, accessToken); break;
           case "update_task": result = await calendarService.updateTask(call.args.id as string, call.args as any, accessToken); break;
-          default: throw new Error(`Tool not implemented: ${call.name}`);
+          default: result = { error: "Tool not supported" };
         }
       } catch (e: any) {
-        return { text: `Sorry, something went wrong: ${e.message}` };
+        result = { error: e.message };
       }
-
       parts.push({ functionResponse: { name: call.name, response: wrapToolResult(result) } });
     }
+    
     response = await chat.sendMessage({ message: parts });
     toolRounds++;
   }
 
-  const finalPrefix = isSiri ? "(Siri command) " : "";
-  return { text: finalPrefix + (extractModelText(response) || "Got it, I've updated things for you.") };
+  const finalPrefix = isSiri ? "(Siri) " : "";
+  return { text: finalPrefix + (extractModelText(response) || "Processed.") };
 }
 
 export async function processTTSAction(text: string) {

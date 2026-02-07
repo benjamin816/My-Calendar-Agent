@@ -3,32 +3,31 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react';
 import { useSession, signIn, signOut } from "next-auth/react";
-import { useSearchParams, useRouter } from 'next/navigation';
+import { useSearchParams, useRouter } from 'navigation';
 import { CalendarEvent, CalendarTask, ChatMessage } from '../../types';
 import { calendarService, setCalendarToken } from '../../services/calendar';
 import { ChronosBrain, decodeAudio, playPcmAudio } from '../../services/gemini.client';
-// Fix: Removed startOfToday as it may not be exported in the current date-fns version
-import { format, addDays, isSameDay, addMinutes, endOfDay, isBefore } from 'date-fns';
+// Fix: Remove unused and potentially missing parseISO import from date-fns
+import { format, addDays, isSameDay, endOfDay } from 'date-fns';
 import { 
-  ChatBubbleLeftRightIcon, 
   MicrophoneIcon, 
-  StopIcon, 
   ChevronLeftIcon, 
   ChevronRightIcon,
   ArrowPathIcon,
   CheckIcon,
   Cog6ToothIcon,
   Squares2X2Icon,
-  ListBulletIcon,
   PaperAirplaneIcon,
   ArrowLeftOnRectangleIcon,
   ClockIcon,
-  TrashIcon,
   SparklesIcon,
   CalendarDaysIcon,
   CpuChipIcon,
   ArrowUturnLeftIcon,
-  InformationCircleIcon
+  ExclamationCircleIcon,
+  BellAlertIcon,
+  QuestionMarkCircleIcon,
+  TrashIcon
 } from '@heroicons/react/24/outline';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -43,14 +42,9 @@ const startOfDayHelper = (date: Date | number): Date => {
   return d;
 };
 
-const subDaysHelper = (date: Date | number, amount: number): Date => {
-  return addDays(date, -amount);
-};
-
 function ChronosAppContent() {
   const { data: session, status } = useSession();
   const searchParams = useSearchParams();
-  const router = useRouter();
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [tasks, setTasks] = useState<CalendarTask[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -58,8 +52,7 @@ function ChronosAppContent() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [currentDate, setCurrentDate] = useState(new Date());
-  
-  const [activeTab, setActiveTab] = useState<'calendar' | 'tasks' | 'settings' | 'chat'>('chat');
+  const [activeTab, setActiveTab] = useState<'calendar' | 'settings' | 'chat'>('chat');
 
   const brainRef = useRef<ChronosBrain | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -68,615 +61,330 @@ function ChronosAppContent() {
 
   const isToday = isSameDay(currentDate, new Date());
 
-  useEffect(() => {
-    const lastSessionDate = localStorage.getItem('last_session_date');
-    const todayStr = format(new Date(), 'yyyy-MM-dd');
-    
-    if (lastSessionDate && lastSessionDate !== todayStr) {
-      setMessages([]);
-      localStorage.removeItem('chronos_chat_history');
-    } else {
-      const saved = localStorage.getItem('chronos_chat_history');
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          setMessages(parsed.map((m: any) => ({ ...m, timestamp: new Date(m.timestamp) })));
-        } catch (e) {
-          console.error("Failed to restore chat history", e);
-        }
-      } else {
-        const welcome: ChatMessage = {
-          id: 'welcome',
-          role: 'assistant',
-          content: "Hello! I'm Chronos AI. I can help you manage your calendar, create tasks, or clear your schedule for the day. What's on your mind?",
-          timestamp: new Date()
-        };
-        setMessages([welcome]);
-      }
-    }
-    localStorage.setItem('last_session_date', todayStr);
-  }, []);
-
-  useEffect(() => {
-    if (messages.length > 0) {
-      localStorage.setItem('chronos_chat_history', JSON.stringify(messages));
-    }
-  }, [messages]);
-
+  // Initialization & Data Loading
   useEffect(() => {
     brainRef.current = new ChronosBrain();
+    const saved = localStorage.getItem('chronos_chat_history');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        setMessages(parsed.map((m: any) => ({ ...m, timestamp: new Date(m.timestamp) })));
+      } catch (e) {
+        setMessages([{ id: 'welcome', role: 'assistant', content: "Welcome back! How's your day looking?", timestamp: new Date() }]);
+      }
+    } else {
+      setMessages([{ id: 'welcome', role: 'assistant', content: "Hello! I'm Chronos AI. I can manage your calendar and tasks. What's on your mind?", timestamp: new Date() }]);
+    }
+
     if (typeof window !== 'undefined' && ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
       const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       recognitionRef.current = new SpeechRecognition();
       recognitionRef.current.continuous = false;
       recognitionRef.current.onresult = (event: any) => {
-        const transcript = event.results[0][0].transcript;
-        handleSendMessage(transcript, true);
+        handleSendMessage(event.results[0][0].transcript, true);
       };
       recognitionRef.current.onend = () => setIsListening(false);
     }
   }, []);
 
+  useEffect(() => {
+    if (messages.length > 0) localStorage.setItem('chronos_chat_history', JSON.stringify(messages));
+  }, [messages]);
+
   const refreshData = useCallback(async () => {
     if (!session?.accessToken) return;
+    setCalendarToken(session.accessToken as string);
     try {
-      setCalendarToken(session.accessToken as string);
-      const timeMin = startOfDayHelper(addDays(currentDate, -14)).toISOString();
-      const timeMax = endOfDay(addDays(currentDate, 30)).toISOString();
+      const timeMin = startOfDayHelper(addDays(currentDate, -7)).toISOString();
+      const timeMax = endOfDay(addDays(currentDate, 14)).toISOString();
       const [evs, tks] = await Promise.all([
         calendarService.getEvents(timeMin, timeMax, session.accessToken as string),
         calendarService.getTasks(session.accessToken as string)
       ]);
       setEvents(evs);
       setTasks(tks);
-    } catch (e: any) {
-      console.error("Data refresh failed:", e);
-      if (e.message === 'AUTH_EXPIRED') signIn('google');
-    }
+    } catch (e) { console.error("Refresh error:", e); }
   }, [session, currentDate]);
 
-  const handleSendMessage = useCallback(async (
-    text?: string, 
-    voice: boolean = false, 
-    confirmed: boolean = false, 
-    source: 'web' | 'siri' = 'web',
-    historyOverride?: ChatMessage[]
-  ) => {
+  useEffect(() => { if (status === 'authenticated') refreshData(); }, [status, refreshData]);
+
+  // Message Handling
+  const handleSendMessage = useCallback(async (text?: string, voice: boolean = false, confirmed: boolean = false) => {
     const msg = text || inputText;
     if (!msg.trim() && !confirmed) return;
 
-    let userMsg: ChatMessage | null = null;
     if (!confirmed) {
-      userMsg = {
-        id: Date.now().toString(),
-        role: 'user',
-        content: msg,
-        timestamp: new Date(),
-        source: source,
-        processed: false
-      };
-      setMessages(prev => [...prev, userMsg!]);
+      setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', content: msg, timestamp: new Date() }]);
     }
-
-    const baseHistory = historyOverride || messages;
-    const currentHistory = userMsg ? [...baseHistory, userMsg] : baseHistory;
-
     setInputText('');
     setIsProcessing(true);
 
     try {
-      const result = await brainRef.current?.processMessage(
-        msg, 
-        refreshData, 
-        session?.accessToken as string, 
-        currentHistory,
-        confirmed
-      );
-      
+      const result = await brainRef.current?.processMessage(msg, refreshData, session?.accessToken as string, messages, confirmed);
       if (result) {
-        const assistantMsg: ChatMessage = {
-          id: (Date.now() + 1).toString(),
-          role: 'assistant',
-          content: result.text,
-          timestamp: new Date(),
-          ui: result.ui
-        };
-        setMessages(prev => {
-          return prev.map(m => (m.role === 'user' && m.content === msg) ? { ...m, processed: true } : m).concat(assistantMsg);
-        });
+        const assistantMsg: ChatMessage = { id: Date.now().toString(), role: 'assistant', content: result.text, timestamp: new Date(), ui: result.ui };
+        setMessages(prev => [...prev, assistantMsg]);
         if (voice && result.text) {
-          const audioBase64 = await brainRef.current?.generateSpeech(result.text);
-          if (audioBase64) playPcmAudio(decodeAudio(audioBase64));
+          const audio = await brainRef.current?.generateSpeech(result.text);
+          if (audio) playPcmAudio(decodeAudio(audio));
         }
       }
-    } catch (error: any) {
-      console.error(error);
-      setMessages(prev => [...prev, { id: Date.now().toString(), role: 'system', content: `Error: ${error.message}`, timestamp: new Date() }]);
+    } catch (e: any) {
+      setMessages(prev => [...prev, { id: Date.now().toString(), role: 'system', content: `Error: ${e.message}`, timestamp: new Date() }]);
     } finally {
       setIsProcessing(false);
       refreshData();
     }
   }, [inputText, messages, session, refreshData]);
 
-  useEffect(() => {
-    const siri = searchParams.get('siri');
-    const textParam = searchParams.get('text');
-    const rid = searchParams.get('rid');
-
-    if (siri === '1') {
-      setActiveTab('chat');
-    }
-
-    if (siri === '1' && rid && rid !== lastProcessedRid.current) {
-      lastProcessedRid.current = rid;
-      
-      const triggerSiri = async () => {
-        const welcome: ChatMessage = {
-          id: Date.now().toString(),
-          role: 'assistant',
-          content: "Siri session initialized. I'm clearing the previous chat to focus on your request.",
-          timestamp: new Date()
-        };
-        setMessages([welcome]);
-
-        let dictatedText = textParam;
-
-        if (!dictatedText) {
-          try {
-            const res = await fetch('/api/siri/pending');
-            const data = await res.json();
-            if (data.messages && data.messages.length > 0) {
-              dictatedText = data.messages[data.messages.length - 1].text;
-            } else {
-              setMessages(prev => [...prev, {
-                id: 'sys-' + Date.now(),
-                role: 'system',
-                content: "No pending Siri message found in the queue.",
-                timestamp: new Date()
-              }]);
-              return;
-            }
-          } catch (e) {
-            console.error("Failed to fetch pending Siri message", e);
-            return;
-          }
-        }
-
-        if (dictatedText) {
-          handleSendMessage(dictatedText, false, false, 'siri', [welcome]);
-        }
-
-        const url = new URL(window.location.href);
-        url.searchParams.delete('siri');
-        url.searchParams.delete('text');
-        url.searchParams.delete('rid');
-        window.history.replaceState({}, '', url.toString());
-      };
-
-      triggerSiri();
-    }
-  }, [searchParams, handleSendMessage]);
-
-  useEffect(() => {
-    if (status === 'authenticated') refreshData();
-  }, [status, refreshData]);
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  const resetChat = () => {
-    const welcome: ChatMessage = {
-      id: Date.now().toString(),
-      role: 'assistant',
-      content: "Resetting our conversation. How can I help you with your schedule now?",
-      timestamp: new Date()
-    };
-    setMessages([welcome]);
-    localStorage.removeItem('chronos_chat_history');
-  };
-
-  const handleDurationSelection = (mins: number, pending: any) => {
-    const startStr = pending.args.start;
-    const endStr = format(addMinutes(new Date(startStr), mins), "yyyy-MM-dd'T'HH:mm:ss");
-    const confirmationText = `Executing create_event: ${JSON.stringify({ ...pending.args, end: endStr })}`;
-    handleSendMessage(confirmationText, false, true);
-  };
-
-  const handlePickEvent = (event: CalendarEvent, pending: any) => {
-    const newArgs = { ...pending.args, id: event.id, summary: event.summary };
-    const text = `I'm selecting "${event.summary}" for this action. Args: ${JSON.stringify(newArgs)}`;
-    handleSendMessage(text, false, false);
-  };
-
-  const handleConfirmedAction = (pending: any) => {
-    const confirmationText = `Executing ${pending.action}: ${JSON.stringify(pending.args)}`;
-    handleSendMessage(confirmationText, false, true);
-  };
-
-  const toggleListening = () => {
-    if (isListening) recognitionRef.current?.stop();
-    else { recognitionRef.current?.start(); setIsListening(true); }
-  };
-
-  const getEventsForDay = (day: Date) => {
-    const dayEnd = endOfDay(day);
-    const dayStart = startOfDayHelper(day);
-    return events.filter(e => {
-      const eStart = new Date(e.start);
-      const eEnd = e.isAllDay ? subDaysHelper(new Date(e.end), 0) : new Date(e.end);
-      if (e.isAllDay) {
-        const exclusiveEnd = new Date(e.end);
-        return eStart < dayEnd && exclusiveEnd > dayStart;
-      }
-      return eStart <= dayEnd && eEnd >= dayStart;
-    }).sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
-  };
-
-  const currentDayTasks = useMemo(() => {
-    const selectedDayStr = format(currentDate, 'yyyy-MM-dd');
-    const result = {
-      overdue: [] as CalendarTask[],
-      dueToday: [] as CalendarTask[],
-      completedToday: [] as CalendarTask[],
-    };
-
-    tasks.forEach(t => {
-      if (!t.due) return;
-      const dueStr = t.due.split('T')[0];
-      
-      if (dueStr === selectedDayStr) {
-        if (t.completed) result.completedToday.push(t);
-        else result.dueToday.push(t);
-      } else if (dueStr < selectedDayStr && !t.completed) {
-        result.overdue.push(t);
-      }
-    });
-
-    result.overdue.sort((a, b) => a.due!.localeCompare(b.due!));
-    
-    return result;
-  }, [tasks, currentDate]);
-
+  // UI Helpers
   const toggleTask = async (task: CalendarTask) => {
     if (!session?.accessToken || isProcessing) return;
     setIsProcessing(true);
     try {
       await calendarService.updateTask(task.id, { completed: !task.completed }, session.accessToken as string);
       await refreshData();
-    } catch (e) { console.error(e); }
-    finally { setIsProcessing(false); }
+    } catch (e) { console.error(e); } finally { setIsProcessing(false); }
   };
 
-  const handlePrevDay = () => {
-    if (isToday) return;
-    const prev = addDays(currentDate, -1);
-    // Fix: Using startOfDayHelper instead of missing startOfToday from date-fns
-    if (!isBefore(prev, startOfDayHelper(new Date()))) {
-      setCurrentDate(prev);
-    }
-  };
+  const currentDayContent = useMemo(() => {
+    const dayStr = format(currentDate, 'yyyy-MM-dd');
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+    const dayEnd = endOfDay(currentDate);
+    const dayStart = startOfDayHelper(currentDate);
 
-  const handleNextDay = () => {
-    setCurrentDate(prev => addDays(prev, 1));
+    const dayEvents = events.filter(e => {
+      const s = new Date(e.start);
+      const end = new Date(e.end);
+      return e.isAllDay ? (s <= dayEnd && end >= dayStart) : (s <= dayEnd && end >= dayStart);
+    }).sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
+
+    const dayTasks = tasks.filter(t => t.due && t.due.split('T')[0] === dayStr);
+    const overdue = isToday ? tasks.filter(t => t.due && t.due.split('T')[0] < todayStr && !t.completed) : [];
+
+    return { events: dayEvents, tasks: dayTasks, overdue };
+  }, [events, tasks, currentDate, isToday]);
+
+  const resetChat = () => {
+    setMessages([{ id: 'welcome', role: 'assistant', content: "Chat reset. How can I help you manage your schedule?", timestamp: new Date() }]);
+    localStorage.removeItem('chronos_chat_history');
   };
 
   if (status === "loading") return null;
-  if (status === "unauthenticated") {
-    return (
-      <div className="h-screen flex items-center justify-center p-8 text-center flex-col gap-4">
-        <h2 className="text-2xl font-black">Authentication Required</h2>
-        <button onClick={() => signIn('google')} className="bg-slate-900 text-white px-8 py-3 rounded-2xl font-bold">Sign In</button>
-      </div>
-    );
-  }
 
   return (
-    <div className="flex flex-col lg:flex-row h-[100dvh] max-h-[100dvh] bg-[#f8fafc] font-sans text-slate-900 overflow-hidden overscroll-none">
-      <aside className="hidden lg:flex w-64 bg-white border-r border-slate-200 flex-col p-4 space-y-8">
-        <div className="flex items-center gap-4 px-2">
-          <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center text-white font-bold text-xl shadow-lg">C</div>
-          <span className="font-bold text-xl tracking-tight">Chronos AI</span>
+    <div className="flex flex-col lg:flex-row h-[100dvh] max-h-[100dvh] bg-slate-50 font-sans text-slate-900 overflow-hidden">
+      {/* Sidebar Desktop */}
+      <aside className="hidden lg:flex w-72 bg-white border-r border-slate-200 flex-col p-6 space-y-10">
+        <div className="flex items-center gap-3">
+          <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center text-white font-black text-2xl shadow-xl shadow-blue-200">C</div>
+          <span className="font-black text-2xl tracking-tighter">Chronos</span>
         </div>
-        <nav className="flex-1 space-y-1">
+        <nav className="flex-1 space-y-2">
           <SidebarItem icon={<CpuChipIcon className="w-6 h-6" />} label="AI Assistant" active={activeTab === 'chat'} onClick={() => setActiveTab('chat')} />
-          <SidebarItem icon={<Squares2X2Icon className="w-6 h-6" />} label="Schedule" active={activeTab === 'calendar'} onClick={() => setActiveTab('calendar')} />
-          <SidebarItem icon={<ListBulletIcon className="w-6 h-6" />} label="Tasks" active={activeTab === 'tasks'} onClick={() => setActiveTab('tasks')} />
-          <SidebarItem icon={<Cog6ToothIcon className="w-6 h-6" />} label="Account" active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
+          <SidebarItem icon={<Squares2X2Icon className="w-6 h-6" />} label="My Schedule" active={activeTab === 'calendar'} onClick={() => setActiveTab('calendar')} />
+          <SidebarItem icon={<Cog6ToothIcon className="w-6 h-6" />} label="Settings" active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
         </nav>
       </aside>
 
-      <div className="flex-1 flex flex-col min-0 h-full overflow-hidden pb-16 lg:pb-0">
-        <header className="h-16 lg:h-20 flex items-center justify-between px-4 lg:px-8 bg-white border-b border-slate-200">
-          <div className="flex items-center gap-2 lg:gap-6">
-             {(activeTab === 'calendar' || activeTab === 'tasks') && (
-               <button onClick={() => setCurrentDate(new Date())} className="px-3 py-1 text-xs font-bold bg-slate-100 text-slate-600 rounded-lg">Today</button>
-             )}
-             <h2 className="text-lg lg:text-2xl font-black tracking-tight">
-               {activeTab === 'tasks' ? 'Task Manager' : format(currentDate, 'MMMM yyyy')}
-             </h2>
-          </div>
-          <div className="flex items-center gap-2">
-            {tasks.length > 0 && activeTab === 'tasks' && (
-              <span className="hidden md:inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-800">
-                {tasks.filter(t => !t.completed).length} Pending
-              </span>
-            )}
-            <button onClick={refreshData} className="p-2 hover:bg-slate-100 rounded-xl transition-all active:scale-90">
-              <ArrowPathIcon className={cn("w-5 h-5 text-slate-600", isProcessing && "animate-spin")} />
-            </button>
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col min-h-0 relative h-full">
+        <header className="h-20 flex items-center justify-between px-6 lg:px-10 bg-white/80 backdrop-blur-md border-b border-slate-200 z-10">
+          <h2 className="text-xl lg:text-2xl font-black tracking-tight flex items-center gap-3">
+            {activeTab === 'calendar' ? 'Daily View' : activeTab === 'settings' ? 'Account' : 'Assistant'}
+          </h2>
+          <div className="flex items-center gap-4">
+            <button onClick={refreshData} className="p-2 hover:bg-slate-100 rounded-xl transition-all"><ArrowPathIcon className={cn("w-5 h-5", isProcessing && "animate-spin")} /></button>
           </div>
         </header>
 
-        <main className="flex-1 overflow-hidden p-3 lg:p-6 flex flex-col min-h-0">
-          {(activeTab === 'calendar' || activeTab === 'tasks') && (
-            <div className="flex-1 bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden flex flex-col min-h-0 animate-in fade-in slide-in-from-bottom-4 duration-300">
-              <div className="flex items-center justify-between py-8 px-4 border-b border-slate-100 bg-white">
-                <div className="w-12">
-                  {!isToday && (
-                    <button onClick={handlePrevDay} className="p-2 hover:bg-slate-100 rounded-xl">
-                      <ChevronLeftIcon className="w-7 h-7" />
-                    </button>
-                  )}
+        <main className="flex-1 overflow-hidden p-4 lg:p-8 flex flex-col min-h-0">
+          {activeTab === 'calendar' && (
+            <div className="flex-1 bg-white rounded-[2.5rem] border border-slate-200 shadow-xl shadow-slate-200/50 overflow-hidden flex flex-col animate-in fade-in slide-in-from-bottom-4 duration-500">
+              {/* Date Navigation */}
+              <div className="flex items-center justify-between p-8 border-b border-slate-100">
+                <button onClick={() => setCurrentDate(d => addDays(d, -1))} className="p-3 hover:bg-slate-50 rounded-2xl border border-slate-100 transition-all"><ChevronLeftIcon className="w-6 h-6" /></button>
+                <div className="text-center">
+                  <p className="text-4xl font-black text-slate-900 tracking-tighter">{format(currentDate, 'd')}</p>
+                  <p className={cn("text-[10px] font-black uppercase tracking-[0.3em]", isToday ? "text-blue-600" : "text-slate-400")}>{format(currentDate, 'EEEE')}</p>
                 </div>
-                <div className="text-center flex-1">
-                  <div className="text-4xl lg:text-5xl font-black text-slate-900 leading-none mb-1">{format(currentDate, 'd')}</div>
-                  <h3 className={cn("text-[10px] lg:text-xs font-black uppercase tracking-[0.25em]", isToday ? "text-blue-600" : "text-slate-400")}>{format(currentDate, 'EEEE')}</h3>
-                </div>
-                <div className="w-12 flex justify-end">
-                  <button onClick={handleNextDay} className="p-2 hover:bg-slate-100 rounded-xl">
-                    <ChevronRightIcon className="w-7 h-7" />
-                  </button>
-                </div>
+                <button onClick={() => setCurrentDate(d => addDays(d, 1))} className="p-3 hover:bg-slate-50 rounded-2xl border border-slate-100 transition-all"><ChevronRightIcon className="w-6 h-6" /></button>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-4 custom-scrollbar overscroll-contain">
-                {activeTab === 'calendar' ? (
-                  <>
-                    <div className="space-y-4">
-                      <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 px-2">Events</h4>
-                      {getEventsForDay(currentDate).map(e => (
-                        <EventCard key={e.id} event={e} onClick={() => handleSendMessage(`Tell me about ${e.summary}`)} />
-                      ))}
-                      {getEventsForDay(currentDate).length === 0 && <EmptyDayView label="No Events Today" />}
+              {/* Day Scroll Content */}
+              <div className="flex-1 overflow-y-auto p-6 space-y-10 custom-scrollbar overscroll-contain">
+                {isToday && currentDayContent.overdue.length > 0 && (
+                  <div className="space-y-4 animate-in slide-in-from-left duration-500">
+                    <h4 className="flex items-center gap-2 text-[10px] font-black text-red-500 uppercase tracking-widest px-2"><BellAlertIcon className="w-4 h-4" /> Overdue Tasks</h4>
+                    <div className="space-y-3">
+                      {currentDayContent.overdue.map(t => <TaskItem key={t.id} task={t} onToggle={() => toggleTask(t)} isOverdue />)}
                     </div>
-
-                    <div className="pt-6 space-y-4">
-                      <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 px-2">Tasks for Today</h4>
-                      {currentDayTasks.dueToday.concat(currentDayTasks.completedToday).map(t => (
-                        <TaskCard key={t.id} task={t} onToggle={() => toggleTask(t)} />
-                      ))}
-                      {currentDayTasks.dueToday.length === 0 && currentDayTasks.completedToday.length === 0 && <EmptyDayView label="No Tasks for Today" />}
-                    </div>
-                  </>
-                ) : (
-                  <div className="max-w-3xl mx-auto space-y-10">
-                    {currentDayTasks.overdue.length > 0 && (
-                      <section className="space-y-3">
-                        <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-red-500 px-2 flex items-center gap-2">
-                          <InformationCircleIcon className="w-4 h-4" />
-                          Overdue
-                        </h4>
-                        {currentDayTasks.overdue.map(t => <TaskCard key={t.id} task={t} onToggle={() => toggleTask(t)} />)}
-                      </section>
-                    )}
-
-                    <section className="space-y-3">
-                      <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-600 px-2">
-                        {isToday ? 'Today' : format(currentDate, 'MMM d')}
-                      </h4>
-                      {currentDayTasks.dueToday.length > 0 ? (
-                        currentDayTasks.dueToday.map(t => <TaskCard key={t.id} task={t} onToggle={() => toggleTask(t)} />)
-                      ) : (
-                        <p className="text-xs text-slate-400 italic px-2">No pending tasks for this day.</p>
-                      )}
-                    </section>
-
-                    {currentDayTasks.completedToday.length > 0 && (
-                      <section className="space-y-3 opacity-60">
-                        <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 px-2">Completed</h4>
-                        {currentDayTasks.completedToday.map(t => <TaskCard key={t.id} task={t} onToggle={() => toggleTask(t)} />)}
-                      </section>
-                    )}
-
-                    {currentDayTasks.overdue.length === 0 && currentDayTasks.dueToday.length === 0 && currentDayTasks.completedToday.length === 0 && (
-                      <div className="py-20 flex flex-col items-center justify-center text-slate-300">
-                        <ListBulletIcon className="w-16 h-16 mb-4" />
-                        <p className="font-black uppercase tracking-widest text-sm">No tasks found for this day</p>
-                      </div>
-                    )}
                   </div>
                 )}
+
+                <div className="space-y-4">
+                  <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-2">Events</h4>
+                  <div className="space-y-4">
+                    {currentDayContent.events.map(e => (
+                      <EventItem key={e.id} event={e} onAsk={() => { setActiveTab('chat'); handleSendMessage(`Tell me more about the event "${e.summary}" on my calendar.`); }} />
+                    ))}
+                    {currentDayContent.events.length === 0 && <EmptyState label="Clear Skies Today" />}
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <h4 className="text-[10px] font-black text-blue-600 uppercase tracking-widest px-2">Tasks</h4>
+                  <div className="space-y-3">
+                    {currentDayContent.tasks.map(t => <TaskItem key={t.id} task={t} onToggle={() => toggleTask(t)} />)}
+                    {currentDayContent.tasks.length === 0 && <EmptyState label="No Tasks Due" />}
+                  </div>
+                </div>
               </div>
             </div>
           )}
 
           {activeTab === 'chat' && (
-            <div className="flex-1 flex flex-col bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden min-h-0 animate-in fade-in slide-in-from-bottom-4 duration-300">
-               <ChatInterface 
-                  messages={messages} inputText={inputText} setInputText={setInputText} isProcessing={isProcessing} isListening={isListening} toggleListening={toggleListening} 
-                  handleSendMessage={handleSendMessage} handleDurationSelection={handleDurationSelection} handlePickEvent={handlePickEvent} handleConfirmedAction={handleConfirmedAction} setMessages={setMessages} chatEndRef={chatEndRef} onReset={resetChat}
-               />
+            <div className="flex-1 flex flex-col bg-white rounded-[2.5rem] border border-slate-200 shadow-xl overflow-hidden min-h-0 animate-in fade-in duration-500">
+              <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50/30 custom-scrollbar overscroll-contain">
+                {messages.map((m: ChatMessage) => (
+                  <div key={m.id} className={cn("flex flex-col animate-in fade-in slide-in-from-bottom-2", m.role === 'user' ? 'items-end' : 'items-start')}>
+                    <div className={cn("max-w-[85%] p-5 rounded-[2rem] text-sm shadow-sm whitespace-pre-wrap", m.role === 'user' ? 'bg-slate-900 text-white rounded-tr-none' : 'bg-white text-slate-800 border border-slate-200 rounded-tl-none')}>
+                      {m.content}
+                      {m.ui?.type === 'confirm' && (
+                        <div className="mt-5 flex gap-2 border-t border-slate-100 pt-4">
+                          <button onClick={() => handleSendMessage(`Executing ${m.ui?.pending.action}: ${JSON.stringify(m.ui?.pending.args)}`, false, true)} className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold text-[10px] uppercase tracking-widest shadow-lg shadow-blue-200 active:scale-95 transition-all">Confirm Action</button>
+                          <button onClick={() => setMessages(prev => prev.filter(msg => msg.id !== m.id))} className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold text-[10px] uppercase tracking-widest active:scale-95 transition-all">Dismiss</button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {isProcessing && <ThinkingIndicator />}
+                <div ref={chatEndRef} />
+              </div>
+
+              <div className="p-6 bg-white border-t border-slate-100">
+                <div className="relative group">
+                  <input 
+                    value={inputText} onChange={e => setInputText(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSendMessage()}
+                    placeholder="Ask Chronos..." className="w-full bg-slate-50 border-2 border-transparent focus:border-blue-100 focus:bg-white rounded-3xl pl-6 pr-24 py-5 font-semibold outline-none transition-all shadow-inner"
+                  />
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                    <button onClick={() => { if(isListening) recognitionRef.current.stop(); else { recognitionRef.current.start(); setIsListening(true); }}} className={cn("p-2 rounded-xl transition-all", isListening ? "bg-red-500 text-white animate-pulse" : "text-slate-400 hover:bg-slate-100")}>
+                      <MicrophoneIcon className="w-6 h-6" />
+                    </button>
+                    <button onClick={() => handleSendMessage()} className="p-3 bg-blue-600 text-white rounded-2xl hover:bg-blue-700 shadow-lg shadow-blue-200 transition-all active:scale-90">
+                      <PaperAirplaneIcon className="w-6 h-6" />
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 
           {activeTab === 'settings' && (
-             <div className="flex-1 bg-white rounded-[2rem] border border-slate-200 shadow-sm p-8 text-center flex flex-col justify-center animate-in fade-in zoom-in duration-300">
-                <div className="w-20 h-20 bg-slate-100 rounded-2xl mx-auto mb-6 flex items-center justify-center"><Cog6ToothIcon className="w-10 h-10 text-slate-400" /></div>
-                <h3 className="text-xl font-black mb-2">Account</h3>
-                <p className="text-slate-500 mb-2 font-bold">{session?.user?.name}</p>
-                <p className="text-xs text-slate-400 mb-8">{session?.user?.email}</p>
-                <button onClick={() => signOut({ callbackUrl: '/' })} className="w-full max-w-xs mx-auto flex items-center justify-center gap-3 p-4 bg-red-50 text-red-600 rounded-2xl font-black uppercase tracking-widest active:scale-95 transition-all">
-                  <ArrowLeftOnRectangleIcon className="w-5 h-5" />
-                  <span>Logout</span>
-                </button>
-             </div>
+            <div className="flex-1 bg-white rounded-[2.5rem] border border-slate-200 p-12 text-center flex flex-col items-center justify-center animate-in zoom-in duration-500">
+               <div className="w-24 h-24 bg-slate-50 rounded-3xl flex items-center justify-center mb-8"><Cog6ToothIcon className="w-12 h-12 text-slate-400" /></div>
+               <h3 className="text-2xl font-black mb-2">{session?.user?.name}</h3>
+               <p className="text-slate-500 mb-10 font-bold">{session?.user?.email}</p>
+               <div className="w-full max-w-sm space-y-3">
+                 <button onClick={resetChat} className="w-full py-4 px-6 bg-slate-100 text-slate-600 rounded-2xl font-black uppercase tracking-widest flex items-center justify-center gap-3 active:scale-95 transition-all hover:bg-slate-200">
+                   <ArrowUturnLeftIcon className="w-5 h-5" /> Clear Chat History
+                 </button>
+                 <button onClick={() => signOut({ callbackUrl: '/' })} className="w-full py-4 px-6 bg-red-50 text-red-600 rounded-2xl font-black uppercase tracking-widest flex items-center justify-center gap-3 active:scale-95 transition-all hover:bg-red-100">
+                   <ArrowLeftOnRectangleIcon className="w-5 h-5" /> Sign Out
+                 </button>
+               </div>
+            </div>
           )}
         </main>
       </div>
 
-      <div className={cn(
-        "hidden w-[400px] bg-white border-l border-slate-200 flex-col shadow-2xl z-20 h-full transition-all duration-300",
-        activeTab === 'chat' ? "lg:hidden" : "lg:flex"
-      )}>
-        <header className="h-20 flex items-center px-8 border-b border-slate-100 justify-between">
-          <h3 className="font-black text-xl flex items-center gap-2">
-            <CpuChipIcon className="w-6 h-6 text-blue-600" />
-            Assistant
-          </h3>
-          <button onClick={resetChat} className="p-2 hover:bg-slate-100 rounded-xl transition-all active:scale-90" title="Reset Conversation">
-            <ArrowUturnLeftIcon className="w-5 h-5 text-slate-400" />
-          </button>
-        </header>
-        <ChatInterface 
-          messages={messages} inputText={inputText} setInputText={setInputText} isProcessing={isProcessing} isListening={isListening} toggleListening={toggleListening} 
-          handleSendMessage={handleSendMessage} handleDurationSelection={handleDurationSelection} handlePickEvent={handlePickEvent} handleConfirmedAction={handleConfirmedAction} setMessages={setMessages} chatEndRef={chatEndRef} onReset={resetChat}
-        />
-      </div>
-
-      <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 flex items-center justify-around h-16 z-50 px-2">
-         <MobileNavItem icon={<CpuChipIcon className="w-6 h-6"/>} active={activeTab === 'chat'} onClick={() => setActiveTab('chat')} label="AI" />
-         <MobileNavItem icon={<Squares2X2Icon className="w-6 h-6"/>} active={activeTab === 'calendar'} onClick={() => setActiveTab('calendar')} label="Daily" />
-         <MobileNavItem icon={<ListBulletIcon className="w-6 h-6"/>} active={activeTab === 'tasks'} onClick={() => setActiveTab('tasks')} label="Tasks" />
-         <MobileNavItem icon={<Cog6ToothIcon className="w-6 h-6"/>} active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} label="Account" />
+      {/* Navigation Mobile */}
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 h-20 bg-white border-t border-slate-200 flex items-center justify-around z-50 px-4 pb-safe">
+        <MobileNavItem icon={<CpuChipIcon className="w-6 h-6" />} label="AI" active={activeTab === 'chat'} onClick={() => setActiveTab('chat')} />
+        <MobileNavItem icon={<Squares2X2Icon className="w-6 h-6" />} label="Schedule" active={activeTab === 'calendar'} onClick={() => setActiveTab('calendar')} />
+        <MobileNavItem icon={<Cog6ToothIcon className="w-6 h-6" />} label="Me" active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
       </nav>
+    </div>
+  );
+}
+
+function SidebarItem({ icon, label, active, onClick }: any) {
+  return (
+    <button onClick={onClick} className={cn("w-full flex items-center gap-4 p-4 rounded-2xl transition-all", active ? "bg-slate-900 text-white font-bold shadow-xl shadow-slate-200" : "text-slate-400 hover:bg-slate-50 hover:text-slate-900 font-semibold")}>
+      {icon} <span>{label}</span>
+    </button>
+  );
+}
+
+function MobileNavItem({ icon, label, active, onClick }: any) {
+  return (
+    <button onClick={onClick} className={cn("flex flex-col items-center gap-1 transition-all active:scale-90", active ? "text-blue-600" : "text-slate-400")}>
+      <div className={cn("p-2 rounded-xl", active && "bg-blue-50")}>{icon}</div>
+      <span className="text-[10px] font-black uppercase tracking-widest">{label}</span>
+    </button>
+  );
+}
+
+function EventItem({ event, onAsk }: any) {
+  return (
+    <div className="bg-white border border-slate-200 p-6 rounded-3xl shadow-sm hover:border-blue-400 cursor-pointer group transition-all relative">
+      <div className="flex justify-between items-start mb-3">
+        <p className="text-lg font-black text-slate-900 group-hover:text-blue-600 transition-colors leading-tight">{event.summary}</p>
+        <button onClick={onAsk} className="p-2 opacity-0 group-hover:opacity-100 transition-opacity bg-blue-50 text-blue-600 rounded-lg"><QuestionMarkCircleIcon className="w-5 h-5" /></button>
+      </div>
+      <div className="flex items-center gap-2 text-[10px] font-black text-slate-400 uppercase tracking-widest">
+        <ClockIcon className="w-4 h-4" />
+        {event.isAllDay ? "All Day Event" : `${format(new Date(event.start), 'h:mm a')} - ${format(new Date(event.end), 'h:mm a')}`}
+      </div>
+    </div>
+  );
+}
+
+function TaskItem({ task, onToggle, isOverdue }: any) {
+  return (
+    <div className={cn("bg-white border p-5 rounded-3xl flex items-center gap-5 transition-all group", isOverdue ? "border-red-200 bg-red-50/10" : "border-slate-200")}>
+      <button onClick={onToggle} className={cn("w-8 h-8 rounded-xl border-2 transition-all flex items-center justify-center shrink-0 active:scale-90", task.completed ? "bg-green-500 border-green-500" : isOverdue ? "border-red-300 bg-white hover:border-red-500" : "border-slate-200 bg-white hover:border-slate-400")}>
+        {task.completed && <CheckIcon className="w-5 h-5 text-white stroke-[3]" />}
+      </button>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          {isOverdue && !task.completed && <ExclamationCircleIcon className="w-4 h-4 text-red-500" />}
+          <p className={cn("text-base font-bold truncate transition-all", task.completed && "line-through text-slate-400", isOverdue && !task.completed && "text-red-900")}>{task.title}</p>
+        </div>
+        {task.notes && <p className="text-[10px] text-slate-400 truncate mt-1">{task.notes}</p>}
+      </div>
+    </div>
+  );
+}
+
+function EmptyState({ label }: { label: string }) {
+  return (
+    <div className="py-12 flex flex-col items-center justify-center opacity-10">
+      <CalendarDaysIcon className="w-12 h-12" />
+      <p className="text-[10px] font-black uppercase tracking-[0.4em] mt-4">{label}</p>
+    </div>
+  );
+}
+
+function ThinkingIndicator() {
+  return (
+    <div className="flex items-center gap-3 px-6 py-4 bg-white/50 border border-slate-100 rounded-[2rem] self-start animate-pulse">
+      <div className="flex gap-1">
+        <div className="w-1.5 h-1.5 bg-blue-600 rounded-full animate-bounce"></div>
+        <div className="w-1.5 h-1.5 bg-blue-600 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
+        <div className="w-1.5 h-1.5 bg-blue-600 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+      </div>
+      <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Chronos is thinking</span>
     </div>
   );
 }
 
 export default function ChronosApp() {
   return (
-    <Suspense fallback={<div className="h-screen bg-[#f8fafc]" />}>
+    <Suspense fallback={<div className="h-screen flex items-center justify-center"><div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div></div>}>
       <ChronosAppContent />
     </Suspense>
-  );
-}
-
-function SidebarItem({ icon, label, active = false, onClick }: any) {
-  return (
-    <button onClick={onClick} className={cn("w-full flex items-center gap-5 p-4 rounded-2xl transition-all", active ? "bg-slate-900 text-white font-black shadow-lg" : "text-slate-400 hover:bg-slate-50 hover:text-slate-900")}>
-      {icon} <span className="text-sm">{label}</span>
-    </button>
-  );
-}
-
-function MobileNavItem({ icon, active, onClick, label }: any) {
-  return (
-    <button onClick={onClick} className={cn("flex flex-col items-center justify-center gap-1 flex-1 h-full transition-all active:scale-90", active ? "text-blue-600" : "text-slate-400")}>
-       <div className={cn("p-1.5 rounded-lg transition-colors", active && "bg-blue-50")}>{icon}</div>
-       <span className="text-[10px] font-black uppercase tracking-tighter">{label}</span>
-    </button>
-  );
-}
-
-function EventCard({ event, onClick }: any) {
-  return (
-    <div onClick={onClick} className="bg-white border border-slate-200 p-4 lg:p-6 rounded-2xl shadow-sm hover:border-blue-400 cursor-pointer active:scale-[0.98] transition-all group">
-      <p className="text-base lg:text-lg font-bold group-hover:text-blue-600 transition-colors">{event.summary}</p>
-      <div className="flex items-center gap-1.5 mt-3 text-[10px] lg:text-xs text-slate-500 font-bold uppercase tracking-wider">
-        <ClockIcon className="w-4 h-4" />
-        {event.isAllDay ? 'All Day' : `${format(new Date(event.start), 'h:mm a')} - ${format(new Date(event.end), 'h:mm a')}`}
-      </div>
-    </div>
-  );
-}
-
-function TaskCard({ task, onToggle }: any) {
-  const dueInfo = useMemo(() => {
-    if (!task.due) return null;
-    const dueStr = task.due.split('T')[0];
-    const todayStr = format(new Date(), 'yyyy-MM-dd');
-    if (dueStr === todayStr) return 'Due Today';
-    return `Due ${format(new Date(task.due), 'MMM d')}`;
-  }, [task.due]);
-
-  const isOverdue = task.due && !task.completed && task.due.split('T')[0] < format(new Date(), 'yyyy-MM-dd');
-
-  return (
-    <div className={cn("bg-white border p-4 lg:p-6 rounded-2xl flex items-center gap-4 transition-all hover:shadow-md", isOverdue ? "border-red-100 bg-red-50/20" : "border-slate-200")}>
-      <button onClick={onToggle} className={cn("w-7 h-7 rounded-xl border-2 transition-all flex items-center justify-center shrink-0 active:scale-90", task.completed ? "bg-green-500 border-green-500" : "border-slate-200 hover:border-slate-400 bg-white")}>
-        {task.completed && <CheckIcon className="w-4 h-4 text-white stroke-[3]" />}
-      </button>
-      <div className="flex-1 min-w-0">
-        <p className={cn("text-base lg:text-lg font-bold truncate transition-all", task.completed && "line-through text-slate-400")}>{task.title}</p>
-        <div className="flex items-center gap-3 mt-1">
-          {dueInfo && <span className={cn("text-[9px] font-black uppercase tracking-widest", isOverdue ? "text-red-500" : "text-slate-400")}>{dueInfo}</span>}
-          {task.notes && <p className="text-[10px] text-slate-400 truncate flex-1">{task.notes}</p>}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function EmptyDayView({ label = "Nothing Scheduled" }: { label?: string }) {
-  return (
-    <div className="py-10 flex flex-col items-center justify-center opacity-10">
-      <CalendarDaysIcon className="w-10 h-10" />
-      <p className="text-[9px] font-black mt-3 uppercase tracking-[0.3em]">{label}</p>
-    </div>
-  );
-}
-
-function ChatInterface({ 
-  messages, inputText, setInputText, isProcessing, isListening, toggleListening, 
-  handleSendMessage, handleDurationSelection, handlePickEvent, handleConfirmedAction, setMessages, chatEndRef, onReset 
-}: any) {
-  return (
-    <div className="flex-1 flex flex-col overflow-hidden h-full">
-      <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-6 bg-slate-50/40 custom-scrollbar overscroll-contain">
-        {messages.length === 0 && (
-          <div className="h-full flex flex-col items-center justify-center opacity-20 text-center space-y-4">
-            <SparklesIcon className="w-16 h-16" />
-            <div>
-              <p className="font-black text-xl uppercase tracking-widest">Assistant</p>
-              <p className="text-sm font-bold mt-1">Ready for your schedule</p>
-            </div>
-          </div>
-        )}
-        {messages.map((m: ChatMessage) => (
-          <div key={m.id} className={cn("flex flex-col animate-in fade-in slide-in-from-bottom-2 duration-300", m.role === 'user' ? 'items-end' : 'items-start')}>
-            {m.source === 'siri' && (
-              <div className="flex items-center gap-1.5 mb-1 px-3">
-                <span className="text-[9px] font-black text-blue-500 uppercase tracking-widest flex items-center gap-1">
-                  <CpuChipIcon className="w-3 h-3" /> Siri Input
-                </span>
-              </div>
-            )}
-            <div className={cn("max-w-[90%] p-4 rounded-[1.5rem] text-sm shadow-sm whitespace-pre-wrap transition-all", m.role === 'user' ? 'bg-slate-900 text-white rounded-br-none' : 'bg-white text-slate-800 border border-slate-100 rounded-bl-none')}>
-              {m.content}
-              {m.ui?.type === 'confirm' && (
-                <div className="mt-4 flex gap-2">
-                  <button onClick={() => handleConfirmedAction(m.ui?.pending)} className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-black text-[10px] uppercase tracking-widest active:scale-95 transition-transform">Confirm</button>
-                  <button onClick={() => setMessages((prev: any) => prev.filter((msg: any) => msg.id !== m.id))} className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-black text-[10px] uppercase tracking-widest active:scale-95 transition-transform">Cancel</button>
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
-        {isProcessing && (
-          <div className="flex items-center gap-2 px-4">
-            <div className="flex gap-1">
-              <span className="w-1 h-1 bg-blue-400 rounded-full animate-bounce"></span>
-              <span className="w-1 h-1 bg-blue-400 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
-              <span className="w-1 h-1 bg-blue-400 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
-            </div>
-            <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Thinking</span>
-          </div>
-        )}
-        <div ref={chatEndRef} />
-      </div>
-      <div className="p-4 lg:p-6 border-t border-slate-100 bg-white">
-        <div className="relative">
-          <input 
-            value={inputText} onChange={e => setInputText(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSendMessage()} 
-            placeholder="How can I help?" className="w-full bg-slate-50 border-none rounded-2xl pl-5 pr-20 py-4 font-semibold focus:ring-4 focus:ring-blue-100 transition-all outline-none" 
-          />
-          <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1">
-            <button onClick={toggleListening} className={cn("p-2 rounded-xl transition-all active:scale-90", isListening ? 'bg-red-500 text-white animate-pulse' : 'text-slate-400 hover:text-slate-600')}><MicrophoneIcon className="w-5 h-5" /></button>
-            <button onClick={() => handleSendMessage()} className="p-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-all active:scale-90"><PaperAirplaneIcon className="w-5 h-5" /></button>
-          </div>
-        </div>
-      </div>
-    </div>
   );
 }
