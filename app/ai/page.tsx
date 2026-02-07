@@ -55,6 +55,8 @@ function ChronosAppContent() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [currentDate, setCurrentDate] = useState(new Date());
+  
+  // Default tab handling
   const [activeTab, setActiveTab] = useState<'calendar' | 'tasks' | 'settings' | 'chat'>('calendar');
 
   const brainRef = useRef<ChronosBrain | null>(null);
@@ -183,17 +185,22 @@ function ChronosAppContent() {
     }
   }, [inputText, messages, session, refreshData]);
 
-  // Siri logic moved to /ai route
+  // Deep-linking and Siri logic: Ensure the AI chat tab is selected when triggered via Siri or direct AI deep-link
   useEffect(() => {
     const siri = searchParams.get('siri');
     const text = searchParams.get('text');
     const rid = searchParams.get('rid');
 
+    // CRITICAL: If siri is present, we MUST switch to the AI chat tab immediately
+    if (siri === '1') {
+      setActiveTab('chat');
+    }
+
     if (siri === '1' && text && rid && rid !== lastProcessedRid.current) {
       lastProcessedRid.current = rid;
       handleSendMessage(text, false, false, 'siri');
       
-      // Clear URL
+      // Clean up URL parameters after processing, but preserve tab state
       const url = new URL(window.location.href);
       url.searchParams.delete('siri');
       url.searchParams.delete('text');
@@ -295,6 +302,7 @@ function ChronosAppContent() {
         <nav className="flex-1 space-y-1">
           <SidebarItem icon={<Squares2X2Icon className="w-6 h-6" />} label="Schedule" active={activeTab === 'calendar'} onClick={() => setActiveTab('calendar')} />
           <SidebarItem icon={<ListBulletIcon className="w-6 h-6" />} label="Tasks" active={activeTab === 'tasks'} onClick={() => setActiveTab('tasks')} />
+          <SidebarItem icon={<CpuChipIcon className="w-6 h-6" />} label="AI Assistant" active={activeTab === 'chat'} onClick={() => setActiveTab('chat')} />
           <SidebarItem icon={<Cog6ToothIcon className="w-6 h-6" />} label="Account" active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
         </nav>
       </aside>
@@ -312,7 +320,7 @@ function ChronosAppContent() {
 
         <main className="flex-1 overflow-hidden p-3 lg:p-6 flex flex-col min-h-0">
           {(activeTab === 'calendar' || activeTab === 'tasks') && (
-            <div className="flex-1 bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden flex flex-col min-h-0">
+            <div className="flex-1 bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden flex flex-col min-h-0 animate-in fade-in slide-in-from-bottom-4 duration-300">
               <div className="flex items-center justify-between py-6 px-4 border-b border-slate-100 bg-white">
                 <button onClick={() => setCurrentDate(prev => addDays(prev, -1))} className="p-2 hover:bg-slate-100 rounded-xl"><ChevronLeftIcon className="w-6 h-6" /></button>
                 <div className="text-center">
@@ -338,7 +346,7 @@ function ChronosAppContent() {
           )}
 
           {activeTab === 'chat' && (
-            <div className="lg:hidden flex-1 flex flex-col bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden min-h-0">
+            <div className="flex-1 flex flex-col bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden min-h-0 animate-in fade-in slide-in-from-bottom-4 duration-300">
                <ChatInterface 
                   messages={messages} inputText={inputText} setInputText={setInputText} isProcessing={isProcessing} isListening={isListening} toggleListening={toggleListening} 
                   handleSendMessage={handleSendMessage} handleDurationSelection={handleDurationSelection} handlePickEvent={handlePickEvent} handleConfirmedAction={handleConfirmedAction} setMessages={setMessages} chatEndRef={chatEndRef} onReset={resetChat}
@@ -347,7 +355,7 @@ function ChronosAppContent() {
           )}
 
           {activeTab === 'settings' && (
-             <div className="flex-1 bg-white rounded-[2rem] border border-slate-200 shadow-sm p-8 text-center flex flex-col justify-center">
+             <div className="flex-1 bg-white rounded-[2rem] border border-slate-200 shadow-sm p-8 text-center flex flex-col justify-center animate-in fade-in zoom-in duration-300">
                 <div className="w-20 h-20 bg-slate-100 rounded-2xl mx-auto mb-6 flex items-center justify-center"><Cog6ToothIcon className="w-10 h-10 text-slate-400" /></div>
                 <h3 className="text-xl font-black mb-2">Account</h3>
                 <p className="text-slate-500 mb-8">{session?.user?.name}</p>
@@ -399,7 +407,7 @@ function SidebarItem({ icon, label, active = false, onClick }: any) {
 
 function MobileNavItem({ icon, active, onClick, label }: any) {
   return (
-    <button onClick={onClick} className={cn("flex flex-col items-center justify-center gap-1 flex-1 h-full", active ? "text-blue-600" : "text-slate-400")}>
+    <button onClick={onClick} className={cn("flex flex-col items-center justify-center gap-1 flex-1 h-full transition-colors", active ? "text-blue-600" : "text-slate-400")}>
        {icon} <span className="text-[10px] font-black uppercase tracking-tighter">{label}</span>
     </button>
   );
@@ -407,7 +415,7 @@ function MobileNavItem({ icon, active, onClick, label }: any) {
 
 function EventCard({ event, onClick }: any) {
   return (
-    <div onClick={onClick} className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm hover:border-blue-400 cursor-pointer">
+    <div onClick={onClick} className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm hover:border-blue-400 cursor-pointer active:scale-[0.98] transition-all">
       <p className="text-sm font-bold">{event.summary}</p>
       <div className="flex items-center gap-1.5 mt-2 text-[10px] text-slate-500 font-bold uppercase">
         <ClockIcon className="w-3.5 h-3.5" />
@@ -420,7 +428,7 @@ function EventCard({ event, onClick }: any) {
 function TaskCard({ task, onToggle }: any) {
   return (
     <div className="bg-white border border-slate-200 p-4 rounded-2xl flex items-center gap-3">
-      <button onClick={onToggle} className={cn("w-6 h-6 rounded-lg border-2", task.completed ? "bg-green-500 border-green-500" : "border-slate-200")}>
+      <button onClick={onToggle} className={cn("w-6 h-6 rounded-lg border-2 transition-colors", task.completed ? "bg-green-500 border-green-500" : "border-slate-200")}>
         {task.completed && <CheckIcon className="w-4 h-4 text-white stroke-[3]" />}
       </button>
       <p className={cn("text-sm font-bold truncate", task.completed && "line-through text-slate-400")}>{task.title}</p>
@@ -443,38 +451,47 @@ function ChatInterface({
 }: any) {
   return (
     <div className="flex-1 flex flex-col overflow-hidden h-full">
-      <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-6 bg-slate-50/40">
+      <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-6 bg-slate-50/40 custom-scrollbar">
+        {messages.length === 0 && (
+          <div className="h-full flex flex-col items-center justify-center opacity-20 text-center space-y-4">
+            <SparklesIcon className="w-16 h-16" />
+            <div>
+              <p className="font-black text-xl uppercase tracking-widest">Assistant</p>
+              <p className="text-sm font-bold mt-1">Ready for your schedule</p>
+            </div>
+          </div>
+        )}
         {messages.map((m: ChatMessage) => (
-          <div key={m.id} className={cn("flex flex-col", m.role === 'user' ? 'items-end' : 'items-start')}>
+          <div key={m.id} className={cn("flex flex-col animate-in fade-in slide-in-from-bottom-2 duration-300", m.role === 'user' ? 'items-end' : 'items-start')}>
             {m.source === 'siri' && (
               <div className="flex items-center gap-1.5 mb-1 px-3">
                 <CpuChipIcon className="w-3 h-3 text-blue-500" />
                 <span className="text-[9px] font-black text-blue-500 uppercase tracking-widest">Siri Input</span>
               </div>
             )}
-            <div className={cn("max-w-[90%] p-4 rounded-[1.5rem] text-sm shadow-sm whitespace-pre-wrap", m.role === 'user' ? 'bg-slate-900 text-white rounded-br-none' : 'bg-white text-slate-800 border border-slate-100 rounded-bl-none')}>
+            <div className={cn("max-w-[90%] p-4 rounded-[1.5rem] text-sm shadow-sm whitespace-pre-wrap transition-all", m.role === 'user' ? 'bg-slate-900 text-white rounded-br-none' : 'bg-white text-slate-800 border border-slate-100 rounded-bl-none')}>
               {m.content}
               {m.ui?.type === 'confirm' && (
                 <div className="mt-4 flex gap-2">
-                  <button onClick={() => handleConfirmedAction(m.ui?.pending)} className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-black text-[10px] uppercase tracking-widest">Confirm</button>
-                  <button onClick={() => setMessages((prev: any) => prev.filter((msg: any) => msg.id !== m.id))} className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-black text-[10px] uppercase tracking-widest">Cancel</button>
+                  <button onClick={() => handleConfirmedAction(m.ui?.pending)} className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-black text-[10px] uppercase tracking-widest active:scale-95 transition-transform">Confirm</button>
+                  <button onClick={() => setMessages((prev: any) => prev.filter((msg: any) => msg.id !== m.id))} className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-black text-[10px] uppercase tracking-widest active:scale-95 transition-transform">Cancel</button>
                 </div>
               )}
             </div>
           </div>
         ))}
-        {isProcessing && <div className="text-[10px] font-black uppercase text-slate-400 animate-pulse">Assistant is thinking...</div>}
+        {isProcessing && <div className="text-[10px] font-black uppercase text-slate-400 animate-pulse px-4">Assistant is thinking...</div>}
         <div ref={chatEndRef} />
       </div>
       <div className="p-4 lg:p-6 border-t border-slate-100 bg-white">
         <div className="relative">
           <input 
             value={inputText} onChange={e => setInputText(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSendMessage()} 
-            placeholder="Type a command..." className="w-full bg-slate-50 border-none rounded-2xl pl-5 pr-20 py-4 font-semibold focus:ring-4 focus:ring-blue-100" 
+            placeholder="How can I help?" className="w-full bg-slate-50 border-none rounded-2xl pl-5 pr-20 py-4 font-semibold focus:ring-4 focus:ring-blue-100 transition-all outline-none" 
           />
           <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1">
-            <button onClick={toggleListening} className={cn("p-2 rounded-xl", isListening ? 'bg-red-500 text-white' : 'text-slate-400')}><MicrophoneIcon className="w-5 h-5" /></button>
-            <button onClick={() => handleSendMessage()} className="p-2 bg-blue-600 text-white rounded-xl"><PaperAirplaneIcon className="w-5 h-5" /></button>
+            <button onClick={toggleListening} className={cn("p-2 rounded-xl transition-colors", isListening ? 'bg-red-500 text-white animate-pulse' : 'text-slate-400 hover:text-slate-600')}><MicrophoneIcon className="w-5 h-5" /></button>
+            <button onClick={() => handleSendMessage()} className="p-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors"><PaperAirplaneIcon className="w-5 h-5" /></button>
           </div>
         </div>
       </div>
