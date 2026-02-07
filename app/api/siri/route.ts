@@ -24,17 +24,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { text, accessToken } = await req.json();
+    const { text } = await req.json();
 
     if (!text) {
       return NextResponse.json({ error: "Missing dictated text" }, { status: 400 });
     }
 
-    if (!accessToken) {
-      return NextResponse.json({ 
-        error: "Google Access Token required to act on your calendar via Siri." 
-      }, { status: 400 });
-    }
 
     // Process the action using the shared server-side logic
     const result = await processChatAction(text, [], accessToken, false, 'siri');
