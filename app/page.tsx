@@ -234,8 +234,6 @@ export default function ChronosApp() {
   const getTasksForDay = (day: Date) => {
     return tasks.filter(t => {
       if (!t.due) return false;
-      // Google Tasks 'due' is usually ISO like '2025-05-20T00:00:00.000Z'
-      // We must compare only the YYYY-MM-DD part to avoid timezone shifts showing tomorrow's tasks today.
       const taskDatePart = t.due.split('T')[0];
       const targetDatePart = format(day, 'yyyy-MM-dd');
       return taskDatePart === targetDatePart;
@@ -293,7 +291,6 @@ export default function ChronosApp() {
 
   return (
     <div className="flex flex-col lg:flex-row h-[100dvh] max-h-[100dvh] bg-[#f8fafc] font-sans text-slate-900 overflow-hidden overscroll-none">
-      {/* Desktop Sidebar */}
       <aside className="hidden lg:flex w-64 bg-white border-r border-slate-200 flex-col p-4 space-y-8">
         <div className="flex items-center gap-4 px-2">
           <div className="w-10 h-10 min-w-10 bg-blue-600 rounded-xl flex items-center justify-center text-white font-bold text-xl shadow-lg">C</div>
@@ -316,7 +313,6 @@ export default function ChronosApp() {
         </div>
       </aside>
 
-      {/* Main Area */}
       <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden pb-16 lg:pb-0">
         <header className="h-16 lg:h-20 flex items-center justify-between px-4 lg:px-8 bg-white border-b border-slate-200 flex-shrink-0">
           <div className="flex items-center gap-2 lg:gap-6">
@@ -333,8 +329,6 @@ export default function ChronosApp() {
         <main className="flex-1 overflow-hidden p-3 lg:p-6 flex flex-col min-h-0">
           {(activeTab === 'calendar' || activeTab === 'tasks') && (
             <div className="flex-1 bg-white rounded-[2rem] lg:rounded-3xl border border-slate-200 shadow-sm overflow-hidden flex flex-col min-h-0">
-              
-              {/* The Large Banner (Primary Navigation) */}
               <div className="flex items-center justify-between py-6 lg:py-10 px-4 lg:px-12 border-b border-slate-100 bg-white flex-shrink-0">
                 <div className="w-12 lg:w-20 flex justify-center">
                   {!isToday && (
@@ -365,7 +359,6 @@ export default function ChronosApp() {
                 </div>
               </div>
 
-              {/* Desktop Header Grid */}
               <div className="hidden lg:grid grid-cols-3 border-b border-slate-100 bg-slate-50/30 flex-shrink-0">
                 {displayDays.map(day => (
                   <div key={day.toISOString()} className="flex flex-col items-center justify-center py-4 border-l first:border-l-0 border-slate-100">
@@ -423,7 +416,7 @@ export default function ChronosApp() {
                   <Cog6ToothIcon className="w-10 h-10 lg:w-12 lg:h-12 text-slate-400" />
                 </div>
                 <h3 className="text-xl lg:text-2xl font-black mb-2 text-slate-900">Account Control</h3>
-                <p className="text-slate-500 mb-8 lg:mb-12 text-sm lg:text-base font-medium">Your account is connected through Google. Disconnecting will remove your access until you sign in again.</p>
+                <p className="text-slate-500 mb-8 lg:mb-12 text-sm lg:text-base font-medium">Your account is connected through Google.</p>
                 <button onClick={() => signOut()} className="w-full flex items-center justify-center gap-3 p-4 lg:p-6 bg-red-50 text-red-600 rounded-2xl font-black uppercase tracking-widest hover:bg-red-100 transition-all active:scale-95">
                   <ArrowLeftOnRectangleIcon className="w-5 h-5 lg:w-6 lg:h-6" />
                   <span>Disconnect Account</span>
@@ -453,7 +446,6 @@ export default function ChronosApp() {
         </main>
       </div>
 
-      {/* Desktop Chat Sidebar */}
       <div className="hidden lg:flex w-[400px] xl:w-[440px] bg-white border-l border-slate-200 flex-col shadow-2xl z-20 overflow-hidden h-full">
         <header className="h-20 flex items-center px-8 border-b border-slate-100 justify-between flex-shrink-0">
           <div className="flex items-center">
@@ -485,7 +477,6 @@ export default function ChronosApp() {
         />
       </div>
 
-      {/* Mobile Tab Bar */}
       <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 flex items-center justify-around h-16 z-50 px-2 pb-safe shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
          <MobileNavItem icon={<Squares2X2Icon className="w-6 h-6"/>} active={activeTab === 'calendar'} onClick={() => setActiveTab('calendar')} label="Schedule" />
          <MobileNavItem icon={<ListBulletIcon className="w-6 h-6"/>} active={activeTab === 'tasks'} onClick={() => setActiveTab('tasks')} label="Tasks" />
@@ -562,12 +553,12 @@ function ChatInterface({
         {messages.length === 0 && (
            <div className="h-full flex flex-col items-center justify-center text-center p-8 space-y-4 opacity-40">
               <ChatBubbleLeftRightIcon className="w-12 h-12 text-slate-300" />
-              <p className="text-slate-400 font-bold text-sm lg:text-base italic">Ask me to \"Schedule coffee tomorrow\" or \"Remind me to buy milk\"</p>
+              <p className="text-slate-400 font-bold text-sm lg:text-base italic">Ask me to "Schedule coffee tomorrow" or "Remind me to buy milk"</p>
            </div>
         )}
         {messages.map((m: ChatMessage) => (
           <div key={m.id} className={cn("flex flex-col animate-in slide-in-from-bottom-2 duration-300", m.role === 'user' ? 'items-end' : 'items-start')}>
-            <div className={cn("max-w-[95%] p-4 lg:p-5 rounded-[1.75rem] text-sm leading-relaxed shadow-sm", m.role === 'user' ? 'bg-slate-900 text-white font-medium rounded-br-none' : 'bg-white text-slate-800 border border-slate-100 rounded-bl-none')}>
+            <div className={cn("max-w-[95%] p-4 lg:p-5 rounded-[1.75rem] text-sm leading-relaxed shadow-sm whitespace-pre-wrap", m.role === 'user' ? 'bg-slate-900 text-white font-medium rounded-br-none' : 'bg-white text-slate-800 border border-slate-100 rounded-bl-none')}>
               {m.content}
               
               {m.ui?.type === 'duration' && (

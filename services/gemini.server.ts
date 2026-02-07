@@ -193,9 +193,9 @@ export async function processChatAction(message: string, history: any[], accessT
         }
 
         await verifyAction(toolName, result?.id || args.id, accessToken, args.date);
-        return { text: `Done. I've updated your schedule as requested.` };
+        return { text: "All set! I've updated your schedule." };
       } catch (e: any) {
-        return { text: `I encountered an issue: ${e.message}` };
+        return { text: `Sorry, I hit a snag: ${e.message}` };
       }
     }
   }
@@ -203,16 +203,23 @@ export async function processChatAction(message: string, history: any[], accessT
   const ai = new GoogleGenAI({ apiKey });
   const currentNYTime = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
 
-  const systemInstruction = `You are Chronos AI.
-  RULES:
-  - Current Time: ${currentNYTime} (America/New_York).
+  const systemInstruction = `You are Chronos AI, a helpful and efficient schedule assistant.
+  Current Time: ${currentNYTime} (America/New_York).
+
+  STYLE RULES:
+  - Be BRIEF and NATURAL. Avoid robotic or overly formal language.
+  - Use BULLET POINTS when listing more than one event or task.
+  - Responses must be easy to read at a glance.
+  - Keep summaries concise.
+
+  ACTION RULES:
   - TASK COMPLETION VS DELETION: 
-    - If a user says "I finished [task]", "Check off [task]", or "Task [task] is done", use update_task with completed: true.
-    - If a user says "Delete [task]", "Remove [task]", or "Get rid of [task]", use delete_task. 
-    - VERBALLY explain the difference if the user seems confused.
-  - DELETIONS: Verbally list names before showing confirmation.
-  - CLEAR_DAY: Only delete single-day events.
-  - ACCURACY: Always specify what you are acting upon.`;
+    - Completion: If a user says "finished", "done", or "check off", use update_task(completed: true).
+    - Deletion: If a user says "delete" or "remove", use delete_task.
+    - If it's unclear, ask: "Do you want to mark this as complete or delete it permanently?"
+  - DELETIONS: List the names of the items before asking for confirmation.
+  - CLEAR_DAY: Only delete single-day events. Preserve multi-day events.
+  - Always be specific about which events/tasks you are acting on.`;
 
   const mappedHistory = history
     .filter(h => h.role === 'user' || h.role === 'assistant')
@@ -246,8 +253,8 @@ export async function processChatAction(message: string, history: any[], accessT
         
         const names = targets.map(t => `"${t.summary}"`).join(", ");
         const text = targets.length > 0 
-          ? `I'm prepared to clear your schedule for ${call.args.date}. This will remove: ${names}. ${others > 0 ? `I'll preserve your ${others} multi-day event(s).` : ''} Should I proceed?`
-          : `I didn't find any single-day events to clear on ${call.args.date}${others > 0 ? `, but I am keeping your ${others} multi-day event(s) safe.` : '.'}`;
+          ? `I'm ready to clear your schedule for ${call.args.date}. I'll remove: ${names}.${others > 0 ? ` I'll keep your ${others} multi-day event(s) safe.` : ''} Ready to go?`
+          : `I didn't find any single-day events to clear on ${call.args.date}${others > 0 ? `, but I'm preserving your ${others} multi-day event(s).` : '.'}`;
 
         return {
           text,
@@ -263,7 +270,7 @@ export async function processChatAction(message: string, history: any[], accessT
         const allEvs = await calendarService.getEvents(undefined, undefined, accessToken);
         const target = allEvs.find(e => e.id === call.args.id);
         return {
-          text: `I've prepared to delete "${target?.summary || 'this event'}". Confirm to remove it?`,
+          text: `Ready to delete "${target?.summary || 'this event'}". Sound good?`,
           ui: {
             type: "confirm",
             action: "delete_event",
@@ -276,7 +283,7 @@ export async function processChatAction(message: string, history: any[], accessT
         const allTasks = await calendarService.getTasks(accessToken);
         const target = allTasks.find(t => t.id === call.args.id);
         return {
-          text: `I've prepared to permanently DELETE "${target?.title || 'this task'}". This is different from checking it off. Should I remove it?`,
+          text: `Just to be sure, do you want to permanently DELETE "${target?.title || 'this task'}", or just mark it as complete?`,
           ui: {
             type: "confirm",
             action: "delete_task",
@@ -297,7 +304,7 @@ export async function processChatAction(message: string, history: any[], accessT
           default: throw new Error(`Tool not implemented: ${call.name}`);
         }
       } catch (e: any) {
-        return { text: `Error: ${e.message}` };
+        return { text: `Sorry, something went wrong: ${e.message}` };
       }
 
       parts.push({ functionResponse: { name: call.name, response: wrapToolResult(result) } });
@@ -306,7 +313,7 @@ export async function processChatAction(message: string, history: any[], accessT
     toolRounds++;
   }
 
-  return { text: extractModelText(response) || "I've updated your calendar." };
+  return { text: extractModelText(response) || "Got it, I've updated things for you." };
 }
 
 export async function processTTSAction(text: string) {
