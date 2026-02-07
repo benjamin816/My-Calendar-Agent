@@ -1,4 +1,3 @@
-
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react';
@@ -56,7 +55,7 @@ function ChronosAppContent() {
   const brainRef = useRef<ChronosBrain | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
-  const siriHandledRef = useRef(false);
+  const hasHandledSiriRef = useRef(false);
 
   const isToday = isSameDay(currentDate, new Date());
 
@@ -135,7 +134,7 @@ function ChronosAppContent() {
     setIsProcessing(true);
 
     try {
-      const currentHistory = clearHistory ? [] : messages;
+      const currentHistory = clearHistory ? [] : (messages.length > 0 ? messages : []);
       const result = await brainRef.current?.processMessage(
         msg, 
         refreshData, 
@@ -161,22 +160,28 @@ function ChronosAppContent() {
     }
   }, [inputText, messages, session, refreshData]);
 
-  // NEW Siri URL PARAM Logic: Stateless & Direct
+  // SIRI INPUT BUGFIX: Direct, Stateless, Single-Execution
   useEffect(() => {
-    if (status !== 'authenticated' || siriHandledRef.current) return;
+    if (status !== 'authenticated' || hasHandledSiriRef.current) return;
 
-    const textParam = searchParams.get('text');
-    if (textParam) {
-      siriHandledRef.current = true; // Guard to run once
-      setActiveTab('chat');
+    const rawText = searchParams.get('text');
+    if (rawText) {
+      hasHandledSiriRef.current = true;
       
-      // Auto-run the command from Siri: clear history, trigger voice response, use 'siri' source
-      handleSendMessage(textParam, true, false, true, 'siri');
+      // Safe Decoding (handling + and % encoding)
+      const decodedText = decodeURIComponent(rawText.replace(/\+/g, " "));
       
-      // Clean URL to prevent re-execution on refresh
-      const params = new URLSearchParams(searchParams.toString());
-      params.delete('text');
-      router.replace(`/ai?${params.toString()}`);
+      if (decodedText.trim()) {
+        setActiveTab('chat');
+        // Auto-run: clear history, trigger voice response, use 'siri' source for confirmation bypass
+        handleSendMessage(decodedText, true, false, true, 'siri');
+        
+        // Immediate URL cleanup
+        const params = new URLSearchParams(searchParams.toString());
+        params.delete('text');
+        const newUrl = params.toString() ? `/ai?${params.toString()}` : '/ai';
+        router.replace(newUrl);
+      }
     }
   }, [status, searchParams, router, handleSendMessage]);
 

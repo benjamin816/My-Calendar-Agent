@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Type, FunctionDeclaration, Modality, Part, GenerateContentResponse } from "@google/genai";
 import { calendarService } from "./calendar";
 
@@ -117,12 +116,6 @@ function wrapToolResult(x: unknown): Record<string, unknown> {
   return { value: String(x) };
 }
 
-function extractModelText(response: GenerateContentResponse): string {
-  if (response.text) return response.text;
-  const parts = response.candidates?.[0]?.content?.parts || [];
-  return parts.map(p => p.text || '').join('').trim();
-}
-
 export async function processChatAction(
   message: string, 
   history: any[], 
@@ -135,7 +128,7 @@ export async function processChatAction(
 
   const isSiri = source === 'siri';
 
-  // Handling direct execution for confirmed/Siri actions
+  // Handling direct execution for confirmed or Siri actions (stateless bypass)
   if ((confirmed || isSiri) && message.startsWith("Executing ")) {
     const match = message.match(/Executing (\w+): (.*)/);
     if (match) {
@@ -159,9 +152,9 @@ export async function processChatAction(
           case "update_task": result = await calendarService.updateTask(args.id, args, accessToken); break;
           default: throw new Error(`Tool ${toolName} not supported in direct execution path.`);
         }
-        return { text: `Success! I've updated your ${toolName.includes('task') ? 'tasks' : 'calendar'}.` };
+        return { text: `Done! I've updated your schedule as requested.` };
       } catch (e: any) {
-        return { text: `Action failed: ${e.message}` };
+        return { text: `I encountered an error while updating: ${e.message}` };
       }
     }
   }
@@ -175,15 +168,15 @@ export async function processChatAction(
   PRINCIPLES:
   - Concise & Action-Oriented.
   - When asked about the schedule, use 'list_events' and 'list_tasks' first.
-  - For deletions or clearing a whole day, ALWAYS ask for confirmation unless from Siri.
+  - For deletions or clearing a whole day, ALWAYS ask for confirmation via UI tool unless source is 'siri'.
   - Clearly distinguish between "completing" a task and "deleting" it.
-  - Present lists with clear formatting.
-  - If requested to 'edit', first find the item's ID using a list tool.
+  - Present lists with clear, readable formatting.
+  - If requested to 'edit' or 'delete' an item but ID is missing, list them first to find the ID.
 
   TOOL USAGE:
-  - Use 'list_events' for visibility into the calendar.
-  - Use 'list_tasks' for visibility into the task list.
-  - If a user says "I'm done with...", suggest update_task(completed: true).`;
+  - Use 'list_events' for calendar visibility.
+  - Use 'list_tasks' for task visibility.
+  - Mark tasks as done with update_task(completed: true).`;
 
   const mappedHistory = history
     .filter(h => h.role === 'user' || h.role === 'assistant')
@@ -193,10 +186,11 @@ export async function processChatAction(
     }));
 
   const chat = ai.chats.create({
-    model: "gemini-3-pro-preview", // Upgraded for better tool precision
+    model: "gemini-3-pro-preview",
     config: {
       systemInstruction,
-      tools: [{ functionDeclarations: calendarTools }]
+      tools: [{ functionDeclarations: calendarTools }],
+      thinkingConfig: { thinkingBudget: 4096 }
     },
     history: mappedHistory
   });
@@ -204,37 +198,39 @@ export async function processChatAction(
   let response = await chat.sendMessage({ message });
 
   let toolRounds = 0;
-  while (response.functionCalls && response.functionCalls.length > 0 && toolRounds < 6) {
+  while (response.functionCalls && response.functionCalls.length > 0 && toolRounds < 8) {
     const parts: Part[] = [];
     
     for (const call of response.functionCalls) {
-      // Force direct execution for risky tools if Siri is the source
-      if (isSiri && ["clear_day", "delete_event", "delete_task"].includes(call.name)) {
+      // Automatic execution for Siri commands if destructive
+      if (isSiri && ["clear_day", "delete_event", "delete_task", "create_event", "update_event", "create_task", "update_task"].includes(call.name)) {
         const executionText = `Executing ${call.name}: ${JSON.stringify(call.args)}`;
         return processChatAction(executionText, history, accessToken, true, 'siri');
       }
 
-      // UI Confirmations for destructive actions
-      if (call.name === "clear_day") {
-        return {
-          text: `Are you sure you want to clear your single-day events for ${call.args.date}?`,
-          ui: { type: "confirm", action: "clear_day", pending: { action: "clear_day", args: call.args } }
-        };
-      }
-      if (call.name === "delete_event") {
-        return {
-          text: `Confirm deleting this event?`,
-          ui: { type: "confirm", action: "delete_event", pending: { action: "delete_event", args: call.args } }
-        };
-      }
-      if (call.name === "delete_task") {
-        return {
-          text: `Confirm deleting this task permanently?`,
-          ui: { type: "confirm", action: "delete_task", pending: { action: "delete_task", args: call.args } }
-        };
+      // UI Confirmations for destructive actions in Web source
+      if (!isSiri) {
+        if (call.name === "clear_day") {
+          return {
+            text: `Are you sure you want to clear all single-day events for ${call.args.date}?`,
+            ui: { type: "confirm", action: "clear_day", pending: { action: "clear_day", args: call.args } }
+          };
+        }
+        if (call.name === "delete_event") {
+          return {
+            text: `Shall I permanently delete this calendar event?`,
+            ui: { type: "confirm", action: "delete_event", pending: { action: "delete_event", args: call.args } }
+          };
+        }
+        if (call.name === "delete_task") {
+          return {
+            text: `Shall I delete this task forever? (Marking it 'done' is safer if you just finished it).`,
+            ui: { type: "confirm", action: "delete_task", pending: { action: "delete_task", args: call.args } }
+          };
+        }
       }
 
-      // Execute non-destructive tools immediately
+      // Execute non-destructive or simple update tools
       let result: any;
       try {
         switch (call.name) {
@@ -244,7 +240,7 @@ export async function processChatAction(
           case "list_tasks": result = await calendarService.getTasks(accessToken); break;
           case "create_task": result = await calendarService.createTask(call.args as any, accessToken); break;
           case "update_task": result = await calendarService.updateTask(call.args.id as string, call.args as any, accessToken); break;
-          default: result = { error: "Tool not supported" };
+          default: result = { error: "Tool not implemented" };
         }
       } catch (e: any) {
         result = { error: e.message };
@@ -256,8 +252,7 @@ export async function processChatAction(
     toolRounds++;
   }
 
-  const finalPrefix = isSiri ? "(Siri) " : "";
-  return { text: finalPrefix + (extractModelText(response) || "Processed.") };
+  return { text: response.text || "I've processed your request." };
 }
 
 export async function processTTSAction(text: string) {
