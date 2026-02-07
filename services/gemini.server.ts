@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Type, FunctionDeclaration, Modality, Part, GenerateContentResponse } from "@google/genai";
 import { calendarService } from "./calendar";
 
@@ -56,7 +55,7 @@ const calendarTools: FunctionDeclaration[] = [
   },
   {
     name: "delete_event",
-    description: "Remove an event by 'id'.",
+    description: "Remove an event permanently. Verbalize the event name first.",
     parameters: {
       type: Type.OBJECT,
       properties: { id: { type: Type.STRING } },
@@ -82,13 +81,13 @@ const calendarTools: FunctionDeclaration[] = [
   },
   {
     name: "update_task",
-    description: "Edit an existing task.",
+    description: "Edit an existing task or mark it as complete. Use completed: true for 'checked off'.",
     parameters: {
       type: Type.OBJECT,
       properties: {
         id: { type: Type.STRING },
         title: { type: Type.STRING },
-        completed: { type: Type.BOOLEAN },
+        completed: { type: Type.BOOLEAN, description: "Whether the task is checked off/finished." },
         dueDate: { type: Type.STRING, description: "YYYY-MM-DD format" }
       },
       required: ["id"]
@@ -96,7 +95,7 @@ const calendarTools: FunctionDeclaration[] = [
   },
   {
     name: "delete_task",
-    description: "Remove a task by ID.",
+    description: "Remove/Delete a task permanently. This is different from completing it.",
     parameters: {
       type: Type.OBJECT,
       properties: { id: { type: Type.STRING } },
@@ -206,12 +205,14 @@ export async function processChatAction(message: string, history: any[], accessT
 
   const systemInstruction = `You are Chronos AI.
   RULES:
-  - Timezone: ${currentNYTime} (America/New_York).
-  - DELETIONS: You MUST verbally list the exact event names being deleted in your response text before showing the confirmation button.
-  - CLEAR_DAY: Only delete events that fall ENTIRELY within that date. Multi-day events that overlap but don't start/end on this day must be preserved. State this explicitly.
-  - MODIFICATIONS: Handle "extend event through X" or "end event on X" by calling update_event with calculated ISO times.
-  - ACCURACY: Never delete anything without naming it first. 
-  Example: "I've found 'Lunch' and 'Gym' tomorrow. Should I clear those? I'll leave your multi-day 'Ski Trip' as is."`;
+  - Current Time: ${currentNYTime} (America/New_York).
+  - TASK COMPLETION VS DELETION: 
+    - If a user says "I finished [task]", "Check off [task]", or "Task [task] is done", use update_task with completed: true.
+    - If a user says "Delete [task]", "Remove [task]", or "Get rid of [task]", use delete_task. 
+    - VERBALLY explain the difference if the user seems confused.
+  - DELETIONS: Verbally list names before showing confirmation.
+  - CLEAR_DAY: Only delete single-day events.
+  - ACCURACY: Always specify what you are acting upon.`;
 
   const mappedHistory = history
     .filter(h => h.role === 'user' || h.role === 'assistant')
@@ -275,7 +276,7 @@ export async function processChatAction(message: string, history: any[], accessT
         const allTasks = await calendarService.getTasks(accessToken);
         const target = allTasks.find(t => t.id === call.args.id);
         return {
-          text: `I've prepared to delete "${target?.title || 'this task'}". Should I remove it?`,
+          text: `I've prepared to permanently DELETE "${target?.title || 'this task'}". This is different from checking it off. Should I remove it?`,
           ui: {
             type: "confirm",
             action: "delete_task",
