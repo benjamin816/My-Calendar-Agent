@@ -26,7 +26,7 @@ async function refreshAccessToken(token: any) {
       ...token,
       accessToken: refreshedTokens.access_token,
       expiresAt: Math.floor(Date.now() / 1000 + refreshedTokens.expires_in),
-      refreshToken: refreshedTokens.refresh_token ?? token.refreshToken, // Fallback to old refresh token
+      refreshToken: refreshedTokens.refresh_token ?? token.refreshToken,
     };
   } catch (error) {
     console.error("Error refreshing access token", error);
@@ -37,7 +37,7 @@ async function refreshAccessToken(token: any) {
   }
 }
 
-const authOptions: NextAuthOptions = {
+export const authOptions: NextAuthOptions = {
   providers: [
     GoogleProvider({
       clientId: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID!,
@@ -54,9 +54,7 @@ const authOptions: NextAuthOptions = {
   ],
   callbacks: {
     async jwt({ token, account, user }) {
-      // Initial sign in
       if (account && user) {
-        // Cast account to any to bypass property access errors (access_token, etc.)
         const acc = account as any;
         return {
           accessToken: acc.access_token,
@@ -65,13 +63,9 @@ const authOptions: NextAuthOptions = {
           user,
         };
       }
-
-      // Return previous token if the access token has not expired yet
       if (Date.now() < (token.expiresAt as number) * 1000) {
         return token;
       }
-
-      // Access token has expired, try to update it
       return refreshAccessToken(token);
     },
     async session({ session, token }: any) {

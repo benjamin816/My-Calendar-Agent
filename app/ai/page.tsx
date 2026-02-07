@@ -1,4 +1,3 @@
-
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react';
@@ -44,6 +43,7 @@ const startOfDayHelper = (date: Date | number): Date => {
 function ChronosAppContent() {
   const { data: session, status } = useSession();
   const searchParams = useSearchParams();
+  const router = useRouter();
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [tasks, setTasks] = useState<CalendarTask[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -56,6 +56,8 @@ function ChronosAppContent() {
   const brainRef = useRef<ChronosBrain | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
+  // Replaced NodeJS.Timeout with ReturnType<typeof setTimeout> to resolve type error in browser environment.
+  const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isToday = isSameDay(currentDate, new Date());
 
@@ -114,21 +116,27 @@ function ChronosAppContent() {
   useEffect(() => { if (status === 'authenticated') refreshData(); }, [status, refreshData]);
 
   // Message Handling
-  const handleSendMessage = useCallback(async (text?: string, voice: boolean = false, confirmed: boolean = false) => {
+  const handleSendMessage = useCallback(async (text?: string, voice: boolean = false, confirmed: boolean = false, clearHistory: boolean = false) => {
     const msg = text || inputText;
     if (!msg.trim() && !confirmed) return;
 
-    if (!confirmed) {
+    if (clearHistory) {
+      setMessages([{ id: Date.now().toString(), role: 'user', content: msg, timestamp: new Date() }]);
+    } else if (!confirmed) {
       setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', content: msg, timestamp: new Date() }]);
     }
+
     setInputText('');
     setIsProcessing(true);
 
     try {
-      const result = await brainRef.current?.processMessage(msg, refreshData, session?.accessToken as string, messages, confirmed);
+      // Note: brainRef should use history from state if not clearing, but for Siri we might start fresh
+      const currentHistory = clearHistory ? [] : messages;
+      const result = await brainRef.current?.processMessage(msg, refreshData, session?.accessToken as string, currentHistory, confirmed);
+      
       if (result) {
-        const assistantMsg: ChatMessage = { id: Date.now().toString(), role: 'assistant', content: result.text, timestamp: new Date(), ui: result.ui };
-        setMessages(prev => [...prev, assistantMsg]);
+        const assistantMsg: ChatMessage = { id: (Date.now() + 1).toString(), role: 'assistant', content: result.text, timestamp: new Date(), ui: result.ui };
+        setMessages(prev => clearHistory ? [prev[0], assistantMsg] : [...prev, assistantMsg]);
         if (voice && result.text) {
           const audio = await brainRef.current?.generateSpeech(result.text);
           if (audio) playPcmAudio(decodeAudio(audio));
@@ -141,6 +149,56 @@ function ChronosAppContent() {
       refreshData();
     }
   }, [inputText, messages, session, refreshData]);
+
+  // SIRI / QUERY PARAM LOGIC
+  useEffect(() => {
+    if (status !== 'authenticated') return;
+
+    const checkSiri = async () => {
+      // 1. Check Query Param ?text=...
+      const textParam = searchParams.get('text');
+      if (textParam) {
+        setActiveTab('chat');
+        handleSendMessage(textParam, true, false, true);
+        // Clear param from URL
+        const params = new URLSearchParams(searchParams.toString());
+        params.delete('text');
+        params.delete('from');
+        router.replace(`/ai?${params.toString()}`);
+        return; // Don't check poll on the same tick if we handled a param
+      }
+
+      // 2. Poll /api/siri/pending
+      try {
+        const res = await fetch('/api/siri/pending');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.messages && data.messages.length > 0) {
+            const latest = data.messages[data.messages.length - 1];
+            setActiveTab('chat');
+            handleSendMessage(latest.text, true, false, true);
+          }
+        }
+      } catch (e) {
+        console.warn("Polling error:", e);
+      }
+    };
+
+    // Initial check
+    checkSiri();
+
+    // Start polling if page is visible
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        checkSiri();
+      }
+    }, 2000);
+
+    pollingRef.current = interval;
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current);
+    };
+  }, [status, searchParams, router, handleSendMessage]);
 
   const resetChat = () => {
     if (confirm("Are you sure you want to clear the conversation history?")) {
@@ -177,7 +235,14 @@ function ChronosAppContent() {
     return { events: dayEvents, tasks: dayTasks, overdue };
   }, [events, tasks, currentDate, isToday]);
 
-  if (status === "loading") return null;
+  if (status === "loading") return (
+    <div className="h-screen flex items-center justify-center bg-slate-50">
+       <div className="flex flex-col items-center gap-4">
+          <SparklesIcon className="w-10 h-10 text-blue-600 animate-spin" />
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Restoring Connection</p>
+       </div>
+    </div>
+  );
 
   return (
     <div className="flex flex-col lg:flex-row h-[100dvh] max-h-[100dvh] bg-slate-50 font-sans text-slate-900 overflow-hidden">
@@ -404,7 +469,7 @@ function ThinkingIndicator() {
 
 export default function ChronosApp() {
   return (
-    <Suspense fallback={<div className="h-screen flex items-center justify-center"><div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div></div>}>
+    <Suspense fallback={<div className="h-screen flex items-center justify-center bg-slate-50"><div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div></div>}>
       <ChronosAppContent />
     </Suspense>
   );
