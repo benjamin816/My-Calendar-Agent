@@ -128,7 +128,6 @@ export async function processChatAction(
 
   const isSiri = source === 'siri';
 
-  // Handling direct execution for confirmed or Siri actions (stateless bypass)
   if ((confirmed || isSiri) && message.startsWith("Executing ")) {
     const match = message.match(/Executing (\w+): (.*)/);
     if (match) {
@@ -202,13 +201,11 @@ export async function processChatAction(
     const parts: Part[] = [];
     
     for (const call of response.functionCalls) {
-      // Automatic execution for Siri commands if destructive
       if (isSiri && ["clear_day", "delete_event", "delete_task", "create_event", "update_event", "create_task", "update_task"].includes(call.name)) {
         const executionText = `Executing ${call.name}: ${JSON.stringify(call.args)}`;
         return processChatAction(executionText, history, accessToken, true, 'siri');
       }
 
-      // UI Confirmations for destructive actions in Web source
       if (!isSiri) {
         if (call.name === "clear_day") {
           return {
@@ -230,7 +227,6 @@ export async function processChatAction(
         }
       }
 
-      // Execute non-destructive or simple update tools
       let result: any;
       try {
         switch (call.name) {
@@ -253,6 +249,80 @@ export async function processChatAction(
   }
 
   return { text: response.text || "I've processed your request." };
+}
+
+/**
+ * Headless execution logic for /api/inbox.
+ * Processes text and executes actions using a service account token.
+ */
+export async function processHeadlessAction(text: string, accessToken: string, calendarId: string) {
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) throw new Error("Missing API_KEY");
+
+  const ai = new GoogleGenAI({ apiKey });
+  const currentNYTime = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
+
+  const systemInstruction = `You are a background scheduler for Chronos.
+  Context: ${currentNYTime} (NY).
+  Goal: Identify the user's intent to create an event or a task.
+  Rules:
+  - If it's a task with a deadline, use 'create_task'.
+  - If it's a scheduled meeting or time-specific entry, use 'create_event'.
+  - Only use 'create_event' or 'create_task'.`;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-3-pro-preview",
+    contents: text,
+    config: {
+      systemInstruction,
+      tools: [{ functionDeclarations: calendarTools }]
+    }
+  });
+
+  const call = response.functionCalls?.[0];
+  if (!call) throw new Error("Gemini could not parse any actionable command from your input.");
+
+  let result: any;
+  let actionType: 'task' | 'event';
+
+  if (call.name === 'create_task' || call.name === 'create_event') {
+    if (call.name === 'create_task') {
+      actionType = 'task';
+      // Headless specific rule: Task -> All-day Event on Calendar
+      const dueDate = (call.args.dueDate as string) || new Date().toISOString().split('T')[0];
+      const start = dueDate;
+      const endD = new Date(dueDate);
+      endD.setDate(endD.getDate() + 1);
+      const end = endD.toISOString().split('T')[0];
+
+      result = await calendarService.createEvent(
+        { summary: `[Task] ${call.args.title}`, description: call.args.notes as string, start, end },
+        accessToken,
+        calendarId,
+        { transparency: 'transparent', isAllDay: true }
+      );
+    } else {
+      actionType = 'event';
+      result = await calendarService.createEvent(
+        call.args as any,
+        accessToken,
+        calendarId,
+        { transparency: 'opaque', isAllDay: false }
+      );
+    }
+
+    return {
+      success: true,
+      action: actionType,
+      calendarId,
+      eventId: result.id,
+      summary: result.summary,
+      start: result.start,
+      end: result.end
+    };
+  }
+
+  throw new Error(`Command '${call.name}' is not supported in the headless inbox.`);
 }
 
 export async function processTTSAction(text: string) {

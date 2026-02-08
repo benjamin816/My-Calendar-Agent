@@ -20,11 +20,12 @@ export const viewport: Viewport = {
   viewportFit: "cover",
 };
 
+// Fix: Use Readonly type for props to satisfy TypeScript's strict children requirement in Next.js layouts
 export default function RootLayout({
   children,
-}: {
+}: Readonly<{
   children: React.ReactNode;
-}) {
+}>) {
   return (
     <html lang="en">
       <body className={`${inter.className} bg-slate-50 text-slate-900 antialiased`}>

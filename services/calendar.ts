@@ -96,7 +96,7 @@ async function tasksFetch(path: string, token: string | null, options: RequestIn
 }
 
 export const calendarService = {
-  getEvents: async (timeMin?: string, timeMax?: string, token: string | null = null): Promise<CalendarEvent[]> => {
+  getEvents: async (timeMin?: string, timeMax?: string, token: string | null = null, calendarId: string = 'primary'): Promise<CalendarEvent[]> => {
     const params = new URLSearchParams({
       timeMin: timeMin || new Date(new Date().setMonth(new Date().getMonth() - 1)).toISOString(),
       timeMax: timeMax || new Date(new Date().setMonth(new Date().getMonth() + 2)).toISOString(),
@@ -104,7 +104,7 @@ export const calendarService = {
       orderBy: 'startTime',
       timeZone: TIMEZONE,
     });
-    const data = await calendarFetch(`/calendars/primary/events?${params}`, token);
+    const data = await calendarFetch(`/calendars/${encodeURIComponent(calendarId)}/events?${params}`, token);
     
     // Filter out events where the current user (self) has declined the invitation
     const filteredItems = (data.items || []).filter((item: any) => {
@@ -128,27 +128,40 @@ export const calendarService = {
     }));
   },
 
-  createEvent: async (event: Omit<CalendarEvent, 'id'>, token: string | null = null): Promise<CalendarEvent> => {
-    const normalizedStart = normalizeNYDateTime(event.start);
-    let normalizedEnd = normalizeNYDateTime(event.end || event.start);
-    
-    // Simple check: if end <= start, default to 1 hour
-    if (new Date(normalizedEnd) <= new Date(normalizedStart)) {
-      const d = new Date(normalizedStart);
-      d.setHours(d.getHours() + 1);
-      normalizedEnd = normalizeNYDateTime(d);
-    }
-
-    const body = {
+  createEvent: async (
+    event: Omit<CalendarEvent, 'id'>, 
+    token: string | null = null, 
+    calendarId: string = 'primary',
+    options: { transparency?: 'opaque' | 'transparent', isAllDay?: boolean } = {}
+  ): Promise<CalendarEvent> => {
+    const body: any = {
       summary: event.summary,
       description: event.description,
-      start: { dateTime: normalizedStart, timeZone: TIMEZONE },
-      end: { dateTime: normalizedEnd, timeZone: TIMEZONE },
+      transparency: options.transparency || 'opaque',
     };
-    const data = await calendarFetch('/calendars/primary/events', token, {
+
+    if (options.isAllDay) {
+      body.start = { date: event.start.split('T')[0] };
+      body.end = { date: event.end.split('T')[0] };
+    } else {
+      const normalizedStart = normalizeNYDateTime(event.start);
+      let normalizedEnd = normalizeNYDateTime(event.end || event.start);
+      
+      if (new Date(normalizedEnd) <= new Date(normalizedStart)) {
+        const d = new Date(normalizedStart);
+        d.setHours(d.getHours() + 1);
+        normalizedEnd = normalizeNYDateTime(d);
+      }
+      
+      body.start = { dateTime: normalizedStart, timeZone: TIMEZONE };
+      body.end = { dateTime: normalizedEnd, timeZone: TIMEZONE };
+    }
+
+    const data = await calendarFetch(`/calendars/${encodeURIComponent(calendarId)}/events`, token, {
       method: 'POST',
       body: JSON.stringify(body),
     });
+    
     return {
       id: data.id,
       summary: data.summary,
@@ -157,14 +170,14 @@ export const calendarService = {
     };
   },
 
-  updateEvent: async (id: string, updates: Partial<CalendarEvent>, token: string | null = null): Promise<CalendarEvent> => {
+  updateEvent: async (id: string, updates: Partial<CalendarEvent>, token: string | null = null, calendarId: string = 'primary'): Promise<CalendarEvent> => {
     const body: any = {};
     if (updates.summary) body.summary = updates.summary;
     if (updates.description) body.description = updates.description;
     if (updates.start) body.start = { dateTime: normalizeNYDateTime(updates.start), timeZone: TIMEZONE };
     if (updates.end) body.end = { dateTime: normalizeNYDateTime(updates.end), timeZone: TIMEZONE };
 
-    const data = await calendarFetch(`/calendars/primary/events/${id}`, token, {
+    const data = await calendarFetch(`/calendars/${encodeURIComponent(calendarId)}/events/${id}`, token, {
       method: 'PATCH',
       body: JSON.stringify(body),
     });
@@ -176,27 +189,24 @@ export const calendarService = {
     };
   },
 
-  deleteEvent: async (id: string, token: string | null = null): Promise<any> => {
-    await calendarFetch(`/calendars/primary/events/${id}`, token, { method: 'DELETE' });
+  deleteEvent: async (id: string, token: string | null = null, calendarId: string = 'primary'): Promise<any> => {
+    await calendarFetch(`/calendars/${encodeURIComponent(calendarId)}/events/${id}`, token, { method: 'DELETE' });
     return { ok: true, id, status: 'deleted' };
   },
 
   getTasks: async (token: string | null = null): Promise<CalendarTask[]> => {
     try {
-      // Step 1: Attempt to get all task lists
       let lists = [];
       try {
         const listsData = await tasksFetch('/users/@me/tasklists', token);
         lists = listsData.items || [];
       } catch (e) {
-        console.warn('Failed to fetch task lists, defaulting to @default', e);
         lists = [{ id: '@default', title: 'My Tasks' }];
       }
       
       const allTasks: CalendarTask[] = [];
       const seenIds = new Set<string>();
       
-      // Step 2: Iterate through each list and fetch its tasks
       for (const list of lists) {
         try {
           const data = await tasksFetch(`/lists/${list.id}/tasks?showCompleted=true&showHidden=true`, token);
@@ -213,31 +223,10 @@ export const calendarService = {
               seenIds.add(item.id);
             }
           }
-        } catch (innerError) {
-          console.warn(`Failed to fetch tasks for list ${list.id}:`, innerError);
-        }
+        } catch (innerError) {}
       }
-
-      // If still empty and we haven't tried @default explicitly, try one last time
-      if (allTasks.length === 0 && !lists.find(l => l.id === '@default')) {
-        try {
-          const data = await tasksFetch('/lists/@default/tasks?showCompleted=true&showHidden=true', token);
-          const items = data.items || [];
-          for (const item of items) {
-            allTasks.push({
-              id: item.id,
-              title: item.title || '(No Title)',
-              due: item.due,
-              completed: item.status === 'completed',
-              notes: item.notes,
-            });
-          }
-        } catch (e) {}
-      }
-      
       return allTasks;
     } catch (e) {
-      console.warn('Failed to fetch tasks', e);
       return [];
     }
   },
@@ -248,7 +237,6 @@ export const calendarService = {
       notes: task.notes,
     };
     if (task.dueDate) {
-      // Google Tasks expects an RFC3339 timestamp with the time part zeroed for all-day tasks
       const dateOnly = task.dueDate.split('T')[0];
       body.due = `${dateOnly}T00:00:00.000Z`;
     }
