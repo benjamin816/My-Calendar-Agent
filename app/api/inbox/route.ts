@@ -3,60 +3,63 @@ import { JWT } from 'google-auth-library';
 import { processHeadlessAction } from '@/services/gemini.server';
 import { calendarService } from '@/services/calendar';
 
+// Force Node.js runtime to ensure full crypto support for PEM decoding
+export const runtime = 'nodejs';
+
 /**
- * Exchanges a Google Service Account credentials for an OAuth2 Access Token using the official library.
- * This is robust against PEM formatting issues and OpenSSL 3 decoder errors common in serverless environments.
+ * Exchanges Google Service Account credentials for an OAuth2 Access Token.
+ * Implements robust key normalization to handle common environment variable formatting issues.
  */
-async function getServiceAccountToken(email: string, privateKey: string) {
-  if (!privateKey) {
-    throw new Error('CHRONOS_SA_PRIVATE_KEY is missing from environment variables.');
+async function getServiceAccountToken(email: string, rawPrivateKey: string) {
+  if (!rawPrivateKey) {
+    throw new Error('CHRONOS_SA_PRIVATE_KEY is missing.');
   }
 
-  // 1. Safe Debug Logging (No secrets revealed)
-  const rawLength = privateKey.length;
-  const hasLiteralSlashN = privateKey.includes('\\n');
-  const hasLiteralSlashR = privateKey.includes('\\r');
-  const startsWithQuote = privateKey.startsWith('"');
+  // 1. Normalization
+  let normalizedKey = rawPrivateKey.trim();
   
-  // 2. Normalization Process
-  let normalizedKey = privateKey.trim();
-  
-  // Strip surrounding double quotes if present
+  // Strip surrounding double quotes if present (often added by env loaders)
   if (normalizedKey.startsWith('"') && normalizedKey.endsWith('"')) {
     normalizedKey = normalizedKey.slice(1, -1);
   }
 
   // Convert literal escaped characters to actual control characters
+  // Handle both Windows (\r\n) and Unix (\n) escaped literals
   normalizedKey = normalizedKey
+    .replace(/\\r\\n/g, '\n')
     .replace(/\\n/g, '\n')
-    .replace(/\\r/g, '\r')
     .trim();
 
-  // 3. Final Verification
-  const finalStartsWithBegin = normalizedKey.startsWith('-----BEGIN PRIVATE KEY-----');
-  const finalEndsWithEnd = normalizedKey.endsWith('-----END PRIVATE KEY-----');
+  // 2. Safe Debug Logging
+  console.log(`[Chronos Auth] Normalized Key Stats:`, {
+    hasKey: true,
+    startsWithBegin: normalizedKey.startsWith('-----BEGIN PRIVATE KEY-----'),
+    endsWithEnd: normalizedKey.endsWith('-----END PRIVATE KEY-----'),
+    containsLiteralSlashN: rawPrivateKey.includes('\\n'),
+    containsRealNewlines: normalizedKey.includes('\n'),
+    keyLength: normalizedKey.length
+  });
 
-  console.log(`[Chronos Auth] Normalization complete. stats: { rawLength: ${rawLength}, hasLiteralSlashN: ${hasLiteralSlashN}, hasLiteralSlashR: ${hasLiteralSlashR}, startsWithQuote: ${startsWithQuote}, validPEMHeader: ${finalStartsWithBegin}, validPEMFooter: ${finalEndsWithEnd} }`);
-
-  if (!finalStartsWithBegin || !finalEndsWithEnd) {
-    throw new Error(`Invalid Google Service Account Private Key format. The normalized key failed PEM structure validation. Starts with BEGIN: ${finalStartsWithBegin}, Ends with END: ${finalEndsWithEnd}. Check CHRONOS_SA_PRIVATE_KEY.`);
+  // 3. Fail Fast
+  if (!normalizedKey.startsWith('-----BEGIN PRIVATE KEY-----') || !normalizedKey.endsWith('-----END PRIVATE KEY-----')) {
+    throw new Error('Invalid private key format: Missing PEM markers (BEGIN/END PRIVATE KEY). Check CHRONOS_SA_PRIVATE_KEY.');
   }
 
   try {
     const client = new JWT({
       email: email,
       key: normalizedKey,
-      scopes: ['https://www.googleapis.com/auth/calendar.events'], // Using more specific scope as requested
+      scopes: ['https://www.googleapis.com/auth/calendar.events'],
     });
 
     const credentials = await client.getAccessToken();
     if (!credentials.token) {
-      throw new Error('Google Auth Library returned successfully but the access token field is empty.');
+      throw new Error('Token exchange successful but returned an empty access token.');
     }
     return credentials.token;
   } catch (err: any) {
-    console.error('[Chronos Auth Error]', err);
-    throw new Error(`Google Authentication failed during token exchange: ${err.message}`);
+    console.error('[Chronos Auth] Exchange Failed:', err.message);
+    throw new Error(`Google Authentication failed: ${err.message}`);
   }
 }
 
@@ -74,53 +77,43 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing text payload" }, { status: 400 });
     }
 
-    // 1️⃣ Parse OUTBOX_ID immediately
+    // 1. Parse OUTBOX_ID for idempotency
     const outboxIdMatch = bodyText.match(/OUTBOX_ID:\s*([^\s\n\r]+)/i);
     const outboxId = outboxIdMatch ? outboxIdMatch[1].trim() : null;
-
-    if (!outboxId) {
-      console.warn("[Chronos Inbox] Missing OUTBOX_ID in payload. Idempotency disabled.");
-    }
 
     const saEmail = process.env.CHRONOS_SA_CLIENT_EMAIL;
     const saKey = process.env.CHRONOS_SA_PRIVATE_KEY;
     const calendarId = process.env.CHRONOS_CALENDAR_ID;
 
     if (!saEmail || !saKey || !calendarId) {
-      throw new Error("Server environment variables for headless execution are missing (SA_CLIENT_EMAIL, SA_PRIVATE_KEY, or CALENDAR_ID).");
+      throw new Error("Missing SA_CLIENT_EMAIL, SA_PRIVATE_KEY, or CALENDAR_ID in environment.");
     }
 
-    // AUTH FIX: Robust key normalization
+    // AUTH FIX: Use robust normalization within the exchange function
     const saAccessToken = await getServiceAccountToken(saEmail, saKey);
 
-    // 2️⃣ Calendar-based idempotency check (BEFORE creation)
+    // 2. Idempotency Check
     if (outboxId) {
       const fingerprintQuery = `OUTBOX_ID=${outboxId}`;
       const now = new Date();
-      // Look back 60 days and forward 365 days
       const timeMin = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000).toISOString();
       const timeMax = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000).toISOString();
       
       const existingEvents = await calendarService.searchEvents(fingerprintQuery, timeMin, timeMax, saAccessToken, calendarId);
-      
       const exactMatch = existingEvents.find(ev => ev.description && ev.description.includes(fingerprintQuery));
       
       if (exactMatch) {
-        const isTask = exactMatch.summary.startsWith('[Task]');
         return NextResponse.json({
           ok: true,
           outbox_id: outboxId,
           idempotent: true,
           event_id: exactMatch.id,
-          action: isTask ? 'task_as_all_day_free_event' : 'timed_event',
-          calendar_id: calendarId,
-          date: exactMatch.start.split('T')[0],
-          reminders_disabled: isTask
+          action: exactMatch.summary.startsWith('[Task]') ? 'task_as_all_day_free_event' : 'timed_event'
         });
       }
     }
 
-    // 3️⃣ Only if NOT found → proceed with AI generation and execution
+    // 3. Process with AI
     let userText = bodyText;
     const delimiterMatch = bodyText.match(/\n---\s*\n?([\s\S]*)$/);
     if (delimiterMatch) {
@@ -130,7 +123,6 @@ export async function POST(req: NextRequest) {
     }
 
     const result = await processHeadlessAction(userText, saAccessToken, calendarId, outboxId || undefined);
-    const isTask = result.action === 'task_as_all_day_free_event';
 
     return NextResponse.json({
       ok: true,
@@ -139,15 +131,14 @@ export async function POST(req: NextRequest) {
       event_id: result.eventId,
       action: result.action,
       calendar_id: calendarId,
-      date: result.start.split('T')[0],
-      reminders_disabled: isTask
+      date: result.start.split('T')[0]
     });
 
   } catch (error: any) {
     console.error("[Inbox API Error]", error);
     return NextResponse.json({ 
       ok: false,
-      error: error.message || "Headless execution failed"
+      error: error.message || "Execution failed"
     }, { status: 500 });
   }
 }
