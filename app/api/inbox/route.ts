@@ -1,3 +1,4 @@
+
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { Buffer } from 'buffer';
@@ -60,13 +61,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing text payload" }, { status: 400 });
     }
 
-    // 1. Parse OUTBOX_ID
-    let outboxId: string | null = null;
+    // Rule B: Extract OUTBOX_ID reliably
+    const outboxIdMatch = bodyText.match(/OUTBOX_ID:\s*([^\s\n\r]+)/i);
+    const outboxId = outboxIdMatch ? outboxIdMatch[1].trim() : null;
+    
+    // Extract actual user instruction (after --- if present, otherwise clean body)
     let userText = bodyText;
-    const outboxMatch = bodyText.match(/^OUTBOX_ID:\s*([^\n\r]+)/);
-    if (outboxMatch) {
-      outboxId = outboxMatch[1].trim();
-      userText = bodyText.replace(/^OUTBOX_ID:[^\n]*\n?(---\n?)?/, '').trim();
+    const delimiterMatch = bodyText.match(/\n---\s*\n?([\s\S]*)$/);
+    if (delimiterMatch) {
+      userText = delimiterMatch[1].trim();
+    } else {
+      // If no delimiter, just remove the OUTBOX_ID line to avoid confusing the AI
+      userText = bodyText.replace(/OUTBOX_ID:\s*[^\n]*\n?/i, '').trim();
     }
 
     const saEmail = process.env.CHRONOS_SA_CLIENT_EMAIL;
@@ -77,49 +83,50 @@ export async function POST(req: NextRequest) {
       throw new Error("Server environment variables for headless execution are missing.");
     }
 
-    // 2. Get Service Account Token
     const saAccessToken = await getServiceAccountToken(saEmail, saKey);
 
-    // 3. Calendar-based Idempotency Check
+    // Rule B: Calendar-based Idempotency Check with wide window
     if (outboxId) {
-      const searchQuery = `OUTBOX_ID=${outboxId}`;
-      // Search +/- 30 days window for safety as requested
+      const fingerprint = `OUTBOX_ID=${outboxId}`;
       const now = new Date();
+      // timeMin = now minus 30 days, timeMax = now plus 365 days
       const timeMin = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
-      const timeMax = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
+      const timeMax = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000).toISOString();
       
-      const existingEvents = await calendarService.searchEvents(searchQuery, timeMin, timeMax, saAccessToken, calendarId);
+      const existingEvents = await calendarService.searchEvents(fingerprint, timeMin, timeMax, saAccessToken, calendarId);
       
-      if (existingEvents.length > 0) {
-        const match = existingEvents[0];
-        const isTask = match.summary.startsWith('[Task]');
-        
+      // Exact string containment check on the fingerprint
+      const exactMatch = existingEvents.find(ev => ev.description && ev.description.includes(fingerprint));
+      
+      if (exactMatch) {
+        const isTask = exactMatch.summary.startsWith('[Task]');
         return NextResponse.json({
           ok: true,
           outbox_id: outboxId,
           idempotent: true,
+          event_id: exactMatch.id,
           action: isTask ? 'task_as_all_day_free_event' : 'timed_event',
           calendar_id: calendarId,
-          event_id: match.id,
-          start: match.start,
-          end: match.end
+          date: exactMatch.start.split('T')[0],
+          reminders_disabled: isTask // Existing tasks would have reminders disabled by policy
         });
       }
     }
 
-    // 4. Process via Gemini and Execute
+    // Process via Gemini
     const result = await processHeadlessAction(userText, saAccessToken, calendarId, outboxId || undefined);
+    const isTask = result.action === 'task_as_all_day_free_event';
 
-    // 5. Success Response
+    // Success Response following the requested JSON structure
     return NextResponse.json({
       ok: true,
       outbox_id: outboxId || "not_provided",
       idempotent: false,
-      action: result.action,
-      calendar_id: result.calendarId,
       event_id: result.eventId,
-      start: result.start,
-      end: result.end
+      action: result.action,
+      calendar_id: calendarId,
+      date: result.start.split('T')[0],
+      reminders_disabled: isTask
     });
 
   } catch (error: any) {

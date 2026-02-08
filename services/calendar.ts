@@ -1,3 +1,4 @@
+
 import { CalendarEvent, CalendarTask } from '../types';
 
 const BASE_URL = 'https://www.googleapis.com/calendar/v3';
@@ -157,6 +158,14 @@ export const calendarService = {
       transparency: options.transparency || 'opaque',
     };
 
+    // Rule A: Tasks that become all-day FREE events must have NO reminders/notifications
+    if (options.isAllDay && options.transparency === 'transparent') {
+      body.reminders = {
+        useDefault: false,
+        overrides: []
+      };
+    }
+
     if (options.isAllDay) {
       body.start = { date: event.start.split('T')[0] };
       // End date is exclusive in Google Calendar all-day events
@@ -188,6 +197,7 @@ export const calendarService = {
       summary: data.summary,
       start: data.start.dateTime || data.start.date,
       end: data.end.dateTime || data.end.date,
+      isAllDay: !!data.start.date
     };
   },
 
@@ -216,7 +226,6 @@ export const calendarService = {
   },
 
   getTasks: async (token: string | null = null): Promise<CalendarTask[]> => {
-    // Note: We still fetch tasks for viewing, but creation/policy now favors Calendar.
     try {
       let lists = [];
       try {
