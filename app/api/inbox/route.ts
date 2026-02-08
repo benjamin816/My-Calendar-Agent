@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { Buffer } from 'buffer';
 import { processHeadlessAction } from '@/services/gemini.server';
-import { idempotencyService } from '@/services/idempotency';
+import { calendarService } from '@/services/calendar';
 
 /**
  * Exchanges a Google Service Account JWT for an OAuth2 Access Token.
@@ -47,7 +47,6 @@ async function getServiceAccountToken(email: string, privateKey: string) {
 }
 
 export async function POST(req: NextRequest) {
-  let outboxId: string | null = null;
   try {
     const authHeader = req.headers.get('x-chronos-key');
     const expectedKey = process.env.CHRONOS_INBOX_KEY;
@@ -61,45 +60,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing text payload" }, { status: 400 });
     }
 
-    // 1. Parse OUTBOX_ID from the custom text format
+    // 1. Parse OUTBOX_ID
+    let outboxId: string | null = null;
     let userText = bodyText;
     const outboxMatch = bodyText.match(/^OUTBOX_ID:\s*([^\n\r]+)/);
     if (outboxMatch) {
       outboxId = outboxMatch[1].trim();
-      // Clean up header and delimiter for Gemini's benefit
       userText = bodyText.replace(/^OUTBOX_ID:[^\n]*\n?(---\n?)?/, '').trim();
-    }
-
-    // 2. Idempotency Check
-    if (outboxId) {
-      const existing = await idempotencyService.get(outboxId);
-      if (existing) {
-        if (existing.status === 'succeeded') {
-          return NextResponse.json({
-            ok: true,
-            outbox_id: outboxId,
-            action: existing.action_type,
-            calendar_id: existing.calendar_id,
-            event_id: existing.event_id,
-            start: existing.start,
-            end: existing.end,
-            idempotent: true
-          });
-        }
-        if (existing.status === 'processing') {
-          // Return a structured response that indicates it's already in progress
-          return NextResponse.json({
-            ok: false,
-            outbox_id: outboxId,
-            error: "Still processing previous request",
-            retry_after: 5
-          }, { status: 409 });
-        }
-        // If status is 'failed', we allow a retry.
-      }
-      
-      // Start tracking
-      await idempotencyService.set(outboxId, { status: 'processing' });
     }
 
     const saEmail = process.env.CHRONOS_SA_CLIENT_EMAIL;
@@ -110,53 +77,55 @@ export async function POST(req: NextRequest) {
       throw new Error("Server environment variables for headless execution are missing.");
     }
 
-    // 3. Get Service Account Token
+    // 2. Get Service Account Token
     const saAccessToken = await getServiceAccountToken(saEmail, saKey);
+
+    // 3. Calendar-based Idempotency Check
+    if (outboxId) {
+      const searchQuery = `OUTBOX_ID=${outboxId}`;
+      // Search +/- 30 days window for safety as requested
+      const now = new Date();
+      const timeMin = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      const timeMax = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
+      
+      const existingEvents = await calendarService.searchEvents(searchQuery, timeMin, timeMax, saAccessToken, calendarId);
+      
+      if (existingEvents.length > 0) {
+        const match = existingEvents[0];
+        const isTask = match.summary.startsWith('[Task]');
+        
+        return NextResponse.json({
+          ok: true,
+          outbox_id: outboxId,
+          idempotent: true,
+          action: isTask ? 'task_as_all_day_free_event' : 'timed_event',
+          calendar_id: calendarId,
+          event_id: match.id,
+          start: match.start,
+          end: match.end
+        });
+      }
+    }
 
     // 4. Process via Gemini and Execute
     const result = await processHeadlessAction(userText, saAccessToken, calendarId, outboxId || undefined);
 
-    // 5. Save Success Record
-    if (outboxId) {
-      // Fix: Changed result.calendar_id to result.calendarId to match returned type from processHeadlessAction
-      await idempotencyService.set(outboxId, {
-        status: 'succeeded',
-        action_type: result.action,
-        calendar_id: result.calendarId,
-        event_id: result.eventId,
-        start: result.start,
-        end: result.end
-      });
-    }
-
-    console.log(`[Inbox] Successfully processed headless request. Created ${result.action}: ${result.eventId}`);
-    
-    // Fix: Changed result.calendar_id to result.calendarId to match returned type from processHeadlessAction
+    // 5. Success Response
     return NextResponse.json({
       ok: true,
       outbox_id: outboxId || "not_provided",
+      idempotent: false,
       action: result.action,
       calendar_id: result.calendarId,
       event_id: result.eventId,
       start: result.start,
-      end: result.end,
-      idempotent: false
+      end: result.end
     });
 
   } catch (error: any) {
     console.error("[Inbox API Error]", error);
-    
-    // Save Failure Record
-    if (outboxId) {
-      await idempotencyService.set(outboxId, {
-        status: 'failed',
-        last_error: error.message
-      });
-    }
-
     return NextResponse.json({ 
       ok: false,
-      outbox_id: outboxId || "not_provided",
       error: error.message || "Headless execution failed"
     }, { status: 500 });
   }

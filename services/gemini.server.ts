@@ -70,7 +70,7 @@ const calendarTools: FunctionDeclaration[] = [
   },
   {
     name: "create_task",
-    description: "Add a new task to the default task list.",
+    description: "Add a new task. Note: Chronos policy transforms this into an all-day transparent event on the calendar.",
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -123,9 +123,6 @@ export async function processChatAction(
   confirmed: boolean = false, 
   source: 'web' | 'siri' = 'web'
 ) {
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) throw new Error("Missing API_KEY");
-
   const isSiri = source === 'siri';
 
   if ((confirmed || isSiri) && message.startsWith("Executing ")) {
@@ -147,7 +144,20 @@ export async function processChatAction(
             break;
           case "create_event": result = await calendarService.createEvent(args, accessToken); break;
           case "update_event": result = await calendarService.updateEvent(args.id, args, accessToken); break;
-          case "create_task": result = await calendarService.createTask(args, accessToken); break;
+          case "create_task": 
+            // Chronos Policy: Task -> All-day Free Event
+            result = await calendarService.createEvent(
+              { 
+                summary: `[Task] ${args.title}`, 
+                description: args.notes || '', 
+                start: args.dueDate || new Date().toISOString().split('T')[0],
+                end: args.dueDate || new Date().toISOString().split('T')[0]
+              }, 
+              accessToken, 
+              'primary', 
+              { transparency: 'transparent', isAllDay: true }
+            ); 
+            break;
           case "update_task": result = await calendarService.updateTask(args.id, args, accessToken); break;
           default: throw new Error(`Tool ${toolName} not supported in direct execution path.`);
         }
@@ -158,7 +168,8 @@ export async function processChatAction(
     }
   }
 
-  const ai = new GoogleGenAI({ apiKey });
+  // Always use process.env.API_KEY directly when initializing the GoogleGenAI client instance
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const currentNYTime = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
 
   const systemInstruction = `You are Chronos AI, an elite scheduling agent.
@@ -167,15 +178,14 @@ export async function processChatAction(
   PRINCIPLES:
   - Concise & Action-Oriented.
   - When asked about the schedule, use 'list_events' and 'list_tasks' first.
-  - For deletions or clearing a whole day, ALWAYS ask for confirmation via UI tool unless source is 'siri'.
+  - IMPORTANT: All new "tasks" must be created as All-Day Events marked "Free" (Transparent).
   - Clearly distinguish between "completing" a task and "deleting" it.
   - Present lists with clear, readable formatting.
-  - If requested to 'edit' or 'delete' an item but ID is missing, list them first to find the ID.
 
   TOOL USAGE:
   - Use 'list_events' for calendar visibility.
   - Use 'list_tasks' for task visibility.
-  - Mark tasks as done with update_task(completed: true).`;
+  - Create tasks using 'create_task' tool (the implementation will handle the conversion to Calendar).`;
 
   const mappedHistory = history
     .filter(h => h.role === 'user' || h.role === 'assistant')
@@ -206,27 +216,6 @@ export async function processChatAction(
         return processChatAction(executionText, history, accessToken, true, 'siri');
       }
 
-      if (!isSiri) {
-        if (call.name === "clear_day") {
-          return {
-            text: `Are you sure you want to clear all single-day events for ${call.args.date}?`,
-            ui: { type: "confirm", action: "clear_day", pending: { action: "clear_day", args: call.args } }
-          };
-        }
-        if (call.name === "delete_event") {
-          return {
-            text: `Shall I permanently delete this calendar event?`,
-            ui: { type: "confirm", action: "delete_event", pending: { action: "delete_event", args: call.args } }
-          };
-        }
-        if (call.name === "delete_task") {
-          return {
-            text: `Shall I delete this task forever? (Marking it 'done' is safer if you just finished it).`,
-            ui: { type: "confirm", action: "delete_task", pending: { action: "delete_task", args: call.args } }
-          };
-        }
-      }
-
       let result: any;
       try {
         switch (call.name) {
@@ -234,7 +223,20 @@ export async function processChatAction(
           case "create_event": result = await calendarService.createEvent(call.args as any, accessToken); break;
           case "update_event": result = await calendarService.updateEvent(call.args.id as string, call.args as any, accessToken); break;
           case "list_tasks": result = await calendarService.getTasks(accessToken); break;
-          case "create_task": result = await calendarService.createTask(call.args as any, accessToken); break;
+          case "create_task": 
+            // Chronos Policy Enforcement
+            result = await calendarService.createEvent(
+              { 
+                summary: `[Task] ${call.args.title}`, 
+                description: call.args.notes as string || '', 
+                start: (call.args.dueDate as string) || new Date().toISOString().split('T')[0],
+                end: (call.args.dueDate as string) || new Date().toISOString().split('T')[0]
+              }, 
+              accessToken, 
+              'primary', 
+              { transparency: 'transparent', isAllDay: true }
+            ); 
+            break;
           case "update_task": result = await calendarService.updateTask(call.args.id as string, call.args as any, accessToken); break;
           default: result = { error: "Tool not implemented" };
         }
@@ -244,7 +246,8 @@ export async function processChatAction(
       parts.push({ functionResponse: { name: call.name, response: wrapToolResult(result) } });
     }
     
-    response = await chat.sendMessage({ message: parts });
+    // Pass multi-part message response back to the chat.
+    response = await chat.sendMessage({ message: { parts } });
     toolRounds++;
   }
 
@@ -254,22 +257,19 @@ export async function processChatAction(
 /**
  * Headless execution logic for /api/inbox.
  * Processes text and executes actions using a service account token.
- * Now supports an optional outboxId for fingerprinting.
  */
 export async function processHeadlessAction(text: string, accessToken: string, calendarId: string, outboxId?: string) {
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) throw new Error("Missing API_KEY");
-
-  const ai = new GoogleGenAI({ apiKey });
+  // Always use process.env.API_KEY directly when initializing the GoogleGenAI client instance
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const currentNYTime = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
 
   const systemInstruction = `You are a background scheduler for Chronos.
   Context: ${currentNYTime} (NY).
-  Goal: Identify the user's intent to create an event or a task.
-  Rules:
-  - If it's a task with a deadline, use 'create_task'.
-  - If it's a scheduled meeting or time-specific entry, use 'create_event'.
-  - Only use 'create_event' or 'create_task'.`;
+  Goal: Identify user intent to create a 'task' or 'event'.
+  Policy:
+  - If it's a 'task' (deadline-oriented), use 'create_task'.
+  - If it's an 'event' (scheduled time), use 'create_event'.
+  ONLY use one of these two.`;
 
   const response = await ai.models.generateContent({
     model: "gemini-3-pro-preview",
@@ -281,66 +281,58 @@ export async function processHeadlessAction(text: string, accessToken: string, c
   });
 
   const call = response.functionCalls?.[0];
-  if (!call) throw new Error("Gemini could not parse any actionable command from your input.");
+  if (!call) throw new Error("Could not parse actionable command.");
 
-  let result: any;
-  let actionType: 'task' | 'event';
-
-  // Fingerprint logic: Add OUTBOX_ID to description
   const fingerprint = outboxId ? `\n\n[Fingerprint]\nOUTBOX_ID=${outboxId}\nsource=BrainDump` : '';
+  let result: any;
+  let finalAction: string;
 
-  if (call.name === 'create_task' || call.name === 'create_event') {
-    if (call.name === 'create_task') {
-      actionType = 'task';
-      // Headless specific rule: Task -> All-day Event on Calendar
-      const dueDate = (call.args.dueDate as string) || new Date().toISOString().split('T')[0];
-      const start = dueDate;
-      const endD = new Date(dueDate);
-      endD.setDate(endD.getDate() + 1);
-      const end = endD.toISOString().split('T')[0];
-
-      result = await calendarService.createEvent(
-        { 
-          summary: `[Task] ${call.args.title}`, 
-          description: ((call.args.notes as string) || '') + fingerprint, 
-          start, 
-          end 
-        },
-        accessToken,
-        calendarId,
-        { transparency: 'transparent', isAllDay: true }
-      );
-    } else {
-      actionType = 'event';
-      result = await calendarService.createEvent(
-        {
-          ...(call.args as any),
-          description: ((call.args.description as string) || '') + fingerprint,
-        },
-        accessToken,
-        calendarId,
-        { transparency: 'opaque', isAllDay: false }
-      );
-    }
-
-    return {
-      success: true,
-      action: actionType === 'task' ? 'task_as_all_day_free_event' : 'timed_event',
+  if (call.name === 'create_task') {
+    finalAction = 'task_as_all_day_free_event';
+    const dueDate = (call.args.dueDate as string) || new Date().toISOString().split('T')[0];
+    result = await calendarService.createEvent(
+      { 
+        summary: `[Task] ${call.args.title}`, 
+        description: ((call.args.notes as string) || '') + fingerprint, 
+        start: dueDate, 
+        end: dueDate 
+      },
+      accessToken,
       calendarId,
-      eventId: result.id,
-      summary: result.summary,
-      start: result.start,
-      end: result.end
-    };
+      { transparency: 'transparent', isAllDay: true }
+    );
+  } else if (call.name === 'create_event') {
+    finalAction = 'timed_event';
+    result = await calendarService.createEvent(
+      {
+        ...(call.args as any),
+        description: ((call.args.description as string) || '') + fingerprint,
+      },
+      accessToken,
+      calendarId,
+      { transparency: 'opaque', isAllDay: false }
+    );
+  } else {
+    throw new Error(`Command '${call.name}' is not supported in the headless inbox.`);
   }
 
-  throw new Error(`Command '${call.name}' is not supported in the headless inbox.`);
+  return {
+    success: true,
+    action: finalAction,
+    calendarId,
+    eventId: result.id,
+    summary: result.summary,
+    start: result.start,
+    end: result.end
+  };
 }
 
+/**
+ * Handles Text-to-Speech generation.
+ */
 export async function processTTSAction(text: string) {
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) throw new Error("Missing API_KEY");
-  const ai = new GoogleGenAI({ apiKey });
+  // Always use process.env.API_KEY directly when initializing the GoogleGenAI client instance
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash-preview-tts",
     contents: [{ parts: [{ text }] }],

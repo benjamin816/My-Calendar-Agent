@@ -106,7 +106,6 @@ export const calendarService = {
     });
     const data = await calendarFetch(`/calendars/${encodeURIComponent(calendarId)}/events?${params}`, token);
     
-    // Filter out events where the current user (self) has declined the invitation
     const filteredItems = (data.items || []).filter((item: any) => {
       if (item.attendees) {
         const selfAttendee = item.attendees.find((a: any) => a.self);
@@ -128,6 +127,24 @@ export const calendarService = {
     }));
   },
 
+  searchEvents: async (query: string, timeMin?: string, timeMax?: string, token: string | null = null, calendarId: string = 'primary'): Promise<CalendarEvent[]> => {
+    const params = new URLSearchParams({
+      q: query,
+      singleEvents: 'true',
+      ...(timeMin && { timeMin }),
+      ...(timeMax && { timeMax }),
+    });
+    const data = await calendarFetch(`/calendars/${encodeURIComponent(calendarId)}/events?${params}`, token);
+    return (data.items || []).map((item: any) => ({
+      id: item.id,
+      summary: item.summary || '(No Title)',
+      description: item.description,
+      start: item.start.dateTime || item.start.date,
+      end: item.end.dateTime || item.end.date,
+      isAllDay: !!item.start.date,
+    }));
+  },
+
   createEvent: async (
     event: Omit<CalendarEvent, 'id'>, 
     token: string | null = null, 
@@ -142,7 +159,11 @@ export const calendarService = {
 
     if (options.isAllDay) {
       body.start = { date: event.start.split('T')[0] };
-      body.end = { date: event.end.split('T')[0] };
+      // End date is exclusive in Google Calendar all-day events
+      const endDate = event.end ? event.end.split('T')[0] : event.start.split('T')[0];
+      const d = new Date(endDate);
+      d.setDate(d.getDate() + 1);
+      body.end = { date: d.toISOString().split('T')[0] };
     } else {
       const normalizedStart = normalizeNYDateTime(event.start);
       let normalizedEnd = normalizeNYDateTime(event.end || event.start);
@@ -195,6 +216,7 @@ export const calendarService = {
   },
 
   getTasks: async (token: string | null = null): Promise<CalendarTask[]> => {
+    // Note: We still fetch tasks for viewing, but creation/policy now favors Calendar.
     try {
       let lists = [];
       try {
@@ -203,10 +225,8 @@ export const calendarService = {
       } catch (e) {
         lists = [{ id: '@default', title: 'My Tasks' }];
       }
-      
       const allTasks: CalendarTask[] = [];
       const seenIds = new Set<string>();
-      
       for (const list of lists) {
         try {
           const data = await tasksFetch(`/lists/${list.id}/tasks?showCompleted=true&showHidden=true`, token);
@@ -232,25 +252,16 @@ export const calendarService = {
   },
 
   createTask: async (task: { title: string; dueDate?: string; notes?: string }, token: string | null = null): Promise<CalendarTask> => {
-    const body: any = {
-      title: task.title,
-      notes: task.notes,
-    };
+    const body: any = { title: task.title, notes: task.notes };
     if (task.dueDate) {
       const dateOnly = task.dueDate.split('T')[0];
       body.due = `${dateOnly}T00:00:00.000Z`;
     }
-    
     const data = await tasksFetch(`/lists/@default/tasks`, token, {
       method: 'POST',
       body: JSON.stringify(body),
     });
-    return {
-      id: data.id,
-      title: data.title,
-      due: data.due,
-      completed: data.status === 'completed',
-    };
+    return { id: data.id, title: data.title, due: data.due, completed: data.status === 'completed' };
   },
 
   updateTask: async (id: string, updates: Partial<CalendarTask>, token: string | null = null): Promise<CalendarTask> => {
@@ -262,17 +273,11 @@ export const calendarService = {
       const dateOnly = updates.due.split('T')[0];
       body.due = `${dateOnly}T00:00:00.000Z`;
     }
-
     const data = await tasksFetch(`/lists/@default/tasks/${id}`, token, {
       method: 'PATCH',
       body: JSON.stringify(body),
     });
-    return {
-      id: data.id,
-      title: data.title,
-      due: data.due,
-      completed: data.status === 'completed',
-    };
+    return { id: data.id, title: data.title, due: data.due, completed: data.status === 'completed' };
   },
 
   deleteTask: async (id: string, token: string | null = null): Promise<any> => {

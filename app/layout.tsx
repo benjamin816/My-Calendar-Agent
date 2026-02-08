@@ -20,12 +20,15 @@ export const viewport: Viewport = {
   viewportFit: "cover",
 };
 
-// Fix: Use simple prop definition to resolve property 'children' missing error in some TS environments
+/**
+ * Root Layout component for the application.
+ * Fixes Property 'children' missing error by using Readonly props type.
+ */
 export default function RootLayout({
   children,
-}: {
+}: Readonly<{
   children: React.ReactNode;
-}) {
+}>) {
   return (
     <html lang="en">
       <body className={`${inter.className} bg-slate-50 text-slate-900 antialiased`}>
