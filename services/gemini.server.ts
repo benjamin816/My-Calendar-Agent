@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Type, FunctionDeclaration, Modality, Part, GenerateContentResponse } from "@google/genai";
 import { calendarService } from "./calendar";
 
@@ -248,7 +247,6 @@ export async function processChatAction(
     }
     
     // Pass multi-part message response back to the chat.
-    // Fixed: Pass the parts array directly as the message value to match SDK expected type: Part | Part[]
     response = await chat.sendMessage({ message: parts });
     toolRounds++;
   }
@@ -261,7 +259,6 @@ export async function processChatAction(
  * Processes text and executes actions using a service account token.
  */
 export async function processHeadlessAction(text: string, accessToken: string, calendarId: string, outboxId?: string) {
-  // Always use process.env.API_KEY directly when initializing the GoogleGenAI client instance
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const currentNYTime = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
 
@@ -285,7 +282,7 @@ export async function processHeadlessAction(text: string, accessToken: string, c
   const call = response.functionCalls?.[0];
   if (!call) throw new Error("Could not parse actionable command.");
 
-  const fingerprint = outboxId ? `\n\n[Fingerprint]\nOUTBOX_ID=${outboxId}\nsource=BrainDump` : '';
+  const fingerprint = outboxId ? `\n\nOUTBOX_ID=${outboxId}\nSOURCE=BrainDump` : '';
   let result: any;
   let finalAction: string;
 
@@ -333,7 +330,6 @@ export async function processHeadlessAction(text: string, accessToken: string, c
  * Handles Text-to-Speech generation.
  */
 export async function processTTSAction(text: string) {
-  // Always use process.env.API_KEY directly when initializing the GoogleGenAI client instance
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash-preview-tts",

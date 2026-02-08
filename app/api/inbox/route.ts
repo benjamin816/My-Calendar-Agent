@@ -1,4 +1,3 @@
-
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { Buffer } from 'buffer';
@@ -61,18 +60,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing text payload" }, { status: 400 });
     }
 
-    // Rule B: Extract OUTBOX_ID reliably
+    // 1️⃣ Parse OUTBOX_ID immediately
     const outboxIdMatch = bodyText.match(/OUTBOX_ID:\s*([^\s\n\r]+)/i);
     const outboxId = outboxIdMatch ? outboxIdMatch[1].trim() : null;
-    
-    // Extract actual user instruction (after --- if present, otherwise clean body)
-    let userText = bodyText;
-    const delimiterMatch = bodyText.match(/\n---\s*\n?([\s\S]*)$/);
-    if (delimiterMatch) {
-      userText = delimiterMatch[1].trim();
-    } else {
-      // If no delimiter, just remove the OUTBOX_ID line to avoid confusing the AI
-      userText = bodyText.replace(/OUTBOX_ID:\s*[^\n]*\n?/i, '').trim();
+
+    if (!outboxId) {
+      console.warn("[Chronos Inbox] Missing OUTBOX_ID in payload. Idempotency disabled.");
     }
 
     const saEmail = process.env.CHRONOS_SA_CLIENT_EMAIL;
@@ -85,21 +78,22 @@ export async function POST(req: NextRequest) {
 
     const saAccessToken = await getServiceAccountToken(saEmail, saKey);
 
-    // Rule B: Calendar-based Idempotency Check with wide window
+    // 2️⃣ Calendar-based idempotency check (BEFORE creation)
     if (outboxId) {
-      const fingerprint = `OUTBOX_ID=${outboxId}`;
+      const fingerprintQuery = `OUTBOX_ID=${outboxId}`;
       const now = new Date();
-      // timeMin = now minus 30 days, timeMax = now plus 365 days
-      const timeMin = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      // timeMin = now minus 60 days, timeMax = now plus 365 days
+      const timeMin = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000).toISOString();
       const timeMax = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000).toISOString();
       
-      const existingEvents = await calendarService.searchEvents(fingerprint, timeMin, timeMax, saAccessToken, calendarId);
+      const existingEvents = await calendarService.searchEvents(fingerprintQuery, timeMin, timeMax, saAccessToken, calendarId);
       
       // Exact string containment check on the fingerprint
-      const exactMatch = existingEvents.find(ev => ev.description && ev.description.includes(fingerprint));
+      const exactMatch = existingEvents.find(ev => ev.description && ev.description.includes(fingerprintQuery));
       
       if (exactMatch) {
         const isTask = exactMatch.summary.startsWith('[Task]');
+        // 5️⃣ Response must reveal truth - Reveal idempotent: true
         return NextResponse.json({
           ok: true,
           outbox_id: outboxId,
@@ -108,16 +102,24 @@ export async function POST(req: NextRequest) {
           action: isTask ? 'task_as_all_day_free_event' : 'timed_event',
           calendar_id: calendarId,
           date: exactMatch.start.split('T')[0],
-          reminders_disabled: isTask // Existing tasks would have reminders disabled by policy
+          reminders_disabled: isTask
         });
       }
     }
 
-    // Process via Gemini
+    // 3️⃣ Only if NOT found → proceed
+    let userText = bodyText;
+    const delimiterMatch = bodyText.match(/\n---\s*\n?([\s\S]*)$/);
+    if (delimiterMatch) {
+      userText = delimiterMatch[1].trim();
+    } else {
+      userText = bodyText.replace(/OUTBOX_ID:\s*[^\n]*\n?/i, '').trim();
+    }
+
     const result = await processHeadlessAction(userText, saAccessToken, calendarId, outboxId || undefined);
     const isTask = result.action === 'task_as_all_day_free_event';
 
-    // Success Response following the requested JSON structure
+    // 5️⃣ Response must reveal truth - Reveal idempotent: false
     return NextResponse.json({
       ok: true,
       outbox_id: outboxId || "not_provided",
