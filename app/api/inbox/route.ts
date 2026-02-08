@@ -1,49 +1,45 @@
 import { NextRequest, NextResponse } from 'next/server';
-import crypto from 'crypto';
-import { Buffer } from 'buffer';
+import { JWT } from 'google-auth-library';
 import { processHeadlessAction } from '@/services/gemini.server';
 import { calendarService } from '@/services/calendar';
 
 /**
- * Exchanges a Google Service Account JWT for an OAuth2 Access Token.
+ * Exchanges a Google Service Account credentials for an OAuth2 Access Token using the official library.
+ * This is robust against PEM formatting issues and OpenSSL 3 decoder errors common in serverless environments.
  */
 async function getServiceAccountToken(email: string, privateKey: string) {
-  const iat = Math.floor(Date.now() / 1000);
-  const exp = iat + 3600;
-  const header = { alg: 'RS256', typ: 'JWT' };
-  const payload = {
-    iss: email,
-    sub: email,
-    scope: 'https://www.googleapis.com/auth/calendar',
-    aud: 'https://oauth2.googleapis.com/token',
-    iat,
-    exp,
-  };
-
-  const encodedHeader = Buffer.from(JSON.stringify(header)).toString('base64url');
-  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  // 1. Normalize literal \n characters to actual newlines
+  let normalizedKey = privateKey.replace(/\\n/g, '\n');
   
-  const formattedKey = privateKey.replace(/\\n/g, '\n');
+  // 2. Strip surrounding quotes (often added by environment variable managers)
+  if (normalizedKey.startsWith('"') && normalizedKey.endsWith('"')) {
+    normalizedKey = normalizedKey.slice(1, -1);
+  }
   
-  const signature = crypto
-    .createSign('RSA-SHA256')
-    .update(`${encodedHeader}.${encodedPayload}`)
-    .sign(formattedKey, 'base64url');
+  // 3. Trim whitespace
+  normalizedKey = normalizedKey.trim();
 
-  const jwt = `${encodedHeader}.${encodedPayload}.${signature}`;
+  // 4. Assert PEM structure before attempting to decode
+  if (!normalizedKey.startsWith('-----BEGIN PRIVATE KEY-----') || !normalizedKey.endsWith('-----END PRIVATE KEY-----')) {
+    throw new Error('Invalid Google Service Account Private Key format. The key must start with "-----BEGIN PRIVATE KEY-----" and end with "-----END PRIVATE KEY-----". Please check your CHRONOS_SA_PRIVATE_KEY environment variable.');
+  }
 
-  const res = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-      assertion: jwt,
-    }),
-  });
+  try {
+    const client = new JWT({
+      email: email,
+      key: normalizedKey,
+      scopes: ['https://www.googleapis.com/auth/calendar'],
+    });
 
-  const data = await res.json();
-  if (!res.ok) throw new Error(`Google Auth failed: ${data.error_description || data.error}`);
-  return data.access_token;
+    const credentials = await client.getAccessToken();
+    if (!credentials.token) {
+      throw new Error('Google Auth Library successfully contacted the server but no token was returned.');
+    }
+    return credentials.token;
+  } catch (err: any) {
+    console.error('[Service Account Auth Failure]', err);
+    throw new Error(`Google Authentication failed: ${err.message}`);
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -73,16 +69,17 @@ export async function POST(req: NextRequest) {
     const calendarId = process.env.CHRONOS_CALENDAR_ID;
 
     if (!saEmail || !saKey || !calendarId) {
-      throw new Error("Server environment variables for headless execution are missing.");
+      throw new Error("Server environment variables for headless execution are missing (SA_CLIENT_EMAIL, SA_PRIVATE_KEY, or CALENDAR_ID).");
     }
 
+    // AUTH FIX: Using google-auth-library with proper key normalization
     const saAccessToken = await getServiceAccountToken(saEmail, saKey);
 
     // 2️⃣ Calendar-based idempotency check (BEFORE creation)
     if (outboxId) {
       const fingerprintQuery = `OUTBOX_ID=${outboxId}`;
       const now = new Date();
-      // timeMin = now minus 60 days, timeMax = now plus 365 days
+      // Look back 60 days and forward 365 days for safety
       const timeMin = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000).toISOString();
       const timeMax = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000).toISOString();
       
@@ -93,7 +90,6 @@ export async function POST(req: NextRequest) {
       
       if (exactMatch) {
         const isTask = exactMatch.summary.startsWith('[Task]');
-        // 5️⃣ Response must reveal truth - Reveal idempotent: true
         return NextResponse.json({
           ok: true,
           outbox_id: outboxId,
@@ -107,7 +103,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 3️⃣ Only if NOT found → proceed
+    // 3️⃣ Only if NOT found → proceed with AI generation and execution
     let userText = bodyText;
     const delimiterMatch = bodyText.match(/\n---\s*\n?([\s\S]*)$/);
     if (delimiterMatch) {
@@ -119,7 +115,6 @@ export async function POST(req: NextRequest) {
     const result = await processHeadlessAction(userText, saAccessToken, calendarId, outboxId || undefined);
     const isTask = result.action === 'task_as_all_day_free_event';
 
-    // 5️⃣ Response must reveal truth - Reveal idempotent: false
     return NextResponse.json({
       ok: true,
       outbox_id: outboxId || "not_provided",

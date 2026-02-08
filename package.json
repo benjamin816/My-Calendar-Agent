@@ -19,7 +19,8 @@
     "react-dom": "^19.0.0",
     "clsx": "^2.1.1",
     "tailwind-merge": "^2.5.4",
-    "date-fns": "^4.1.0"
+    "date-fns": "^4.1.0",
+    "google-auth-library": "^9.15.0"
   },
   "devDependencies": {
     "@types/node": "^20.17.0",
