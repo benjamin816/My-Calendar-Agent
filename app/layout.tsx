@@ -22,19 +22,22 @@ export const viewport: Viewport = {
 
 /**
  * Root Layout component for the application.
- * Fixes Property 'children' missing error by using Readonly props type.
+ * Fixes Property 'children' missing error on line 35 by using standard prop types 
+ * and passing children as an explicit prop to the Providers component.
  */
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode;
-}>) {
+}) {
   return (
     <html lang="en">
       <body className={`${inter.className} bg-slate-50 text-slate-900 antialiased`}>
-        <Providers>
-          {children}
-        </Providers>
+        {/* 
+          Fixes Error: Property 'children' is missing in type '{}' but required in type '{ children: React.ReactNode; }'
+          By explicitly passing children as a prop, we ensure the TypeScript compiler correctly identifies the prop usage.
+        */}
+        <Providers children={children} />
       </body>
     </html>
   );

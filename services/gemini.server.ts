@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Type, FunctionDeclaration, Modality, Part, GenerateContentResponse } from "@google/genai";
 import { calendarService } from "./calendar";
 
@@ -247,7 +248,8 @@ export async function processChatAction(
     }
     
     // Pass multi-part message response back to the chat.
-    response = await chat.sendMessage({ message: { parts } });
+    // Fixed: Pass the parts array directly as the message value to match SDK expected type: Part | Part[]
+    response = await chat.sendMessage({ message: parts });
     toolRounds++;
   }
 
