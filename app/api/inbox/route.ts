@@ -8,37 +8,55 @@ import { calendarService } from '@/services/calendar';
  * This is robust against PEM formatting issues and OpenSSL 3 decoder errors common in serverless environments.
  */
 async function getServiceAccountToken(email: string, privateKey: string) {
-  // 1. Normalize literal \n characters to actual newlines
-  let normalizedKey = privateKey.replace(/\\n/g, '\n');
+  if (!privateKey) {
+    throw new Error('CHRONOS_SA_PRIVATE_KEY is missing from environment variables.');
+  }
+
+  // 1. Safe Debug Logging (No secrets revealed)
+  const rawLength = privateKey.length;
+  const hasLiteralSlashN = privateKey.includes('\\n');
+  const hasLiteralSlashR = privateKey.includes('\\r');
+  const startsWithQuote = privateKey.startsWith('"');
   
-  // 2. Strip surrounding quotes (often added by environment variable managers)
+  // 2. Normalization Process
+  let normalizedKey = privateKey.trim();
+  
+  // Strip surrounding double quotes if present
   if (normalizedKey.startsWith('"') && normalizedKey.endsWith('"')) {
     normalizedKey = normalizedKey.slice(1, -1);
   }
-  
-  // 3. Trim whitespace
-  normalizedKey = normalizedKey.trim();
 
-  // 4. Assert PEM structure before attempting to decode
-  if (!normalizedKey.startsWith('-----BEGIN PRIVATE KEY-----') || !normalizedKey.endsWith('-----END PRIVATE KEY-----')) {
-    throw new Error('Invalid Google Service Account Private Key format. The key must start with "-----BEGIN PRIVATE KEY-----" and end with "-----END PRIVATE KEY-----". Please check your CHRONOS_SA_PRIVATE_KEY environment variable.');
+  // Convert literal escaped characters to actual control characters
+  normalizedKey = normalizedKey
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\r')
+    .trim();
+
+  // 3. Final Verification
+  const finalStartsWithBegin = normalizedKey.startsWith('-----BEGIN PRIVATE KEY-----');
+  const finalEndsWithEnd = normalizedKey.endsWith('-----END PRIVATE KEY-----');
+
+  console.log(`[Chronos Auth] Normalization complete. stats: { rawLength: ${rawLength}, hasLiteralSlashN: ${hasLiteralSlashN}, hasLiteralSlashR: ${hasLiteralSlashR}, startsWithQuote: ${startsWithQuote}, validPEMHeader: ${finalStartsWithBegin}, validPEMFooter: ${finalEndsWithEnd} }`);
+
+  if (!finalStartsWithBegin || !finalEndsWithEnd) {
+    throw new Error(`Invalid Google Service Account Private Key format. The normalized key failed PEM structure validation. Starts with BEGIN: ${finalStartsWithBegin}, Ends with END: ${finalEndsWithEnd}. Check CHRONOS_SA_PRIVATE_KEY.`);
   }
 
   try {
     const client = new JWT({
       email: email,
       key: normalizedKey,
-      scopes: ['https://www.googleapis.com/auth/calendar'],
+      scopes: ['https://www.googleapis.com/auth/calendar.events'], // Using more specific scope as requested
     });
 
     const credentials = await client.getAccessToken();
     if (!credentials.token) {
-      throw new Error('Google Auth Library successfully contacted the server but no token was returned.');
+      throw new Error('Google Auth Library returned successfully but the access token field is empty.');
     }
     return credentials.token;
   } catch (err: any) {
-    console.error('[Service Account Auth Failure]', err);
-    throw new Error(`Google Authentication failed: ${err.message}`);
+    console.error('[Chronos Auth Error]', err);
+    throw new Error(`Google Authentication failed during token exchange: ${err.message}`);
   }
 }
 
@@ -72,20 +90,19 @@ export async function POST(req: NextRequest) {
       throw new Error("Server environment variables for headless execution are missing (SA_CLIENT_EMAIL, SA_PRIVATE_KEY, or CALENDAR_ID).");
     }
 
-    // AUTH FIX: Using google-auth-library with proper key normalization
+    // AUTH FIX: Robust key normalization
     const saAccessToken = await getServiceAccountToken(saEmail, saKey);
 
     // 2️⃣ Calendar-based idempotency check (BEFORE creation)
     if (outboxId) {
       const fingerprintQuery = `OUTBOX_ID=${outboxId}`;
       const now = new Date();
-      // Look back 60 days and forward 365 days for safety
+      // Look back 60 days and forward 365 days
       const timeMin = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000).toISOString();
       const timeMax = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000).toISOString();
       
       const existingEvents = await calendarService.searchEvents(fingerprintQuery, timeMin, timeMax, saAccessToken, calendarId);
       
-      // Exact string containment check on the fingerprint
       const exactMatch = existingEvents.find(ev => ev.description && ev.description.includes(fingerprintQuery));
       
       if (exactMatch) {
