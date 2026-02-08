@@ -254,8 +254,9 @@ export async function processChatAction(
 /**
  * Headless execution logic for /api/inbox.
  * Processes text and executes actions using a service account token.
+ * Now supports an optional outboxId for fingerprinting.
  */
-export async function processHeadlessAction(text: string, accessToken: string, calendarId: string) {
+export async function processHeadlessAction(text: string, accessToken: string, calendarId: string, outboxId?: string) {
   const apiKey = process.env.API_KEY;
   if (!apiKey) throw new Error("Missing API_KEY");
 
@@ -285,6 +286,9 @@ export async function processHeadlessAction(text: string, accessToken: string, c
   let result: any;
   let actionType: 'task' | 'event';
 
+  // Fingerprint logic: Add OUTBOX_ID to description
+  const fingerprint = outboxId ? `\n\n[Fingerprint]\nOUTBOX_ID=${outboxId}\nsource=BrainDump` : '';
+
   if (call.name === 'create_task' || call.name === 'create_event') {
     if (call.name === 'create_task') {
       actionType = 'task';
@@ -296,7 +300,12 @@ export async function processHeadlessAction(text: string, accessToken: string, c
       const end = endD.toISOString().split('T')[0];
 
       result = await calendarService.createEvent(
-        { summary: `[Task] ${call.args.title}`, description: call.args.notes as string, start, end },
+        { 
+          summary: `[Task] ${call.args.title}`, 
+          description: ((call.args.notes as string) || '') + fingerprint, 
+          start, 
+          end 
+        },
         accessToken,
         calendarId,
         { transparency: 'transparent', isAllDay: true }
@@ -304,7 +313,10 @@ export async function processHeadlessAction(text: string, accessToken: string, c
     } else {
       actionType = 'event';
       result = await calendarService.createEvent(
-        call.args as any,
+        {
+          ...(call.args as any),
+          description: ((call.args.description as string) || '') + fingerprint,
+        },
         accessToken,
         calendarId,
         { transparency: 'opaque', isAllDay: false }
@@ -313,7 +325,7 @@ export async function processHeadlessAction(text: string, accessToken: string, c
 
     return {
       success: true,
-      action: actionType,
+      action: actionType === 'task' ? 'task_as_all_day_free_event' : 'timed_event',
       calendarId,
       eventId: result.id,
       summary: result.summary,

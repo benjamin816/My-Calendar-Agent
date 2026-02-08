@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
-// Fix: Explicitly import Buffer to resolve the "Cannot find name 'Buffer'" error
 import { Buffer } from 'buffer';
 import { processHeadlessAction } from '@/services/gemini.server';
+import { idempotencyService } from '@/services/idempotency';
 
 /**
  * Exchanges a Google Service Account JWT for an OAuth2 Access Token.
@@ -23,7 +23,6 @@ async function getServiceAccountToken(email: string, privateKey: string) {
   const encodedHeader = Buffer.from(JSON.stringify(header)).toString('base64url');
   const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
   
-  // Handle newlines in private key if they were escaped in env vars
   const formattedKey = privateKey.replace(/\\n/g, '\n');
   
   const signature = crypto
@@ -48,6 +47,7 @@ async function getServiceAccountToken(email: string, privateKey: string) {
 }
 
 export async function POST(req: NextRequest) {
+  let outboxId: string | null = null;
   try {
     const authHeader = req.headers.get('x-chronos-key');
     const expectedKey = process.env.CHRONOS_INBOX_KEY;
@@ -56,9 +56,50 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const textInput = await req.text();
-    if (!textInput || !textInput.trim()) {
+    const bodyText = await req.text();
+    if (!bodyText || !bodyText.trim()) {
       return NextResponse.json({ error: "Missing text payload" }, { status: 400 });
+    }
+
+    // 1. Parse OUTBOX_ID from the custom text format
+    let userText = bodyText;
+    const outboxMatch = bodyText.match(/^OUTBOX_ID:\s*([^\n\r]+)/);
+    if (outboxMatch) {
+      outboxId = outboxMatch[1].trim();
+      // Clean up header and delimiter for Gemini's benefit
+      userText = bodyText.replace(/^OUTBOX_ID:[^\n]*\n?(---\n?)?/, '').trim();
+    }
+
+    // 2. Idempotency Check
+    if (outboxId) {
+      const existing = await idempotencyService.get(outboxId);
+      if (existing) {
+        if (existing.status === 'succeeded') {
+          return NextResponse.json({
+            ok: true,
+            outbox_id: outboxId,
+            action: existing.action_type,
+            calendar_id: existing.calendar_id,
+            event_id: existing.event_id,
+            start: existing.start,
+            end: existing.end,
+            idempotent: true
+          });
+        }
+        if (existing.status === 'processing') {
+          // Return a structured response that indicates it's already in progress
+          return NextResponse.json({
+            ok: false,
+            outbox_id: outboxId,
+            error: "Still processing previous request",
+            retry_after: 5
+          }, { status: 409 });
+        }
+        // If status is 'failed', we allow a retry.
+      }
+      
+      // Start tracking
+      await idempotencyService.set(outboxId, { status: 'processing' });
     }
 
     const saEmail = process.env.CHRONOS_SA_CLIENT_EMAIL;
@@ -66,25 +107,57 @@ export async function POST(req: NextRequest) {
     const calendarId = process.env.CHRONOS_CALENDAR_ID;
 
     if (!saEmail || !saKey || !calendarId) {
-      console.error("Missing headless environment variables");
-      return NextResponse.json({ error: "Server configuration missing" }, { status: 500 });
+      throw new Error("Server environment variables for headless execution are missing.");
     }
 
-    // 1. Get Service Account Token
+    // 3. Get Service Account Token
     const saAccessToken = await getServiceAccountToken(saEmail, saKey);
 
-    // 2. Process via Gemini and Execute
-    const result = await processHeadlessAction(textInput, saAccessToken, calendarId);
+    // 4. Process via Gemini and Execute
+    const result = await processHeadlessAction(userText, saAccessToken, calendarId, outboxId || undefined);
+
+    // 5. Save Success Record
+    if (outboxId) {
+      // Fix: Changed result.calendar_id to result.calendarId to match returned type from processHeadlessAction
+      await idempotencyService.set(outboxId, {
+        status: 'succeeded',
+        action_type: result.action,
+        calendar_id: result.calendarId,
+        event_id: result.eventId,
+        start: result.start,
+        end: result.end
+      });
+    }
 
     console.log(`[Inbox] Successfully processed headless request. Created ${result.action}: ${result.eventId}`);
     
-    return NextResponse.json(result);
+    // Fix: Changed result.calendar_id to result.calendarId to match returned type from processHeadlessAction
+    return NextResponse.json({
+      ok: true,
+      outbox_id: outboxId || "not_provided",
+      action: result.action,
+      calendar_id: result.calendarId,
+      event_id: result.eventId,
+      start: result.start,
+      end: result.end,
+      idempotent: false
+    });
 
   } catch (error: any) {
     console.error("[Inbox API Error]", error);
+    
+    // Save Failure Record
+    if (outboxId) {
+      await idempotencyService.set(outboxId, {
+        status: 'failed',
+        last_error: error.message
+      });
+    }
+
     return NextResponse.json({ 
-      error: error.message || "Headless execution failed",
-      details: error.stack 
+      ok: false,
+      outbox_id: outboxId || "not_provided",
+      error: error.message || "Headless execution failed"
     }, { status: 500 });
   }
 }
