@@ -1,4 +1,5 @@
-
+// Add missing React import to fix namespace and children type errors
+import React from "react";
 import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
