@@ -6,43 +6,57 @@ import { calendarService } from '@/services/calendar';
 // Force Node.js runtime to ensure full crypto support for PEM decoding
 export const runtime = 'nodejs';
 
+// Diagnostic Buckets for self-healing/debugging
+const BUCKETS = {
+  MISSING_ENV: 'missing_env',
+  BAD_KEY_FORMAT: 'bad_key_format',
+  TOKEN_EXCHANGE_FAILED: 'token_exchange_failed',
+  CALENDAR_WRITE_FAILED: 'calendar_write_failed',
+  UNAUTHORIZED: 'unauthorized',
+  EXECUTION_FAILED: 'execution_failed'
+};
+
 /**
  * Exchanges Google Service Account credentials for an OAuth2 Access Token.
- * Implements robust key normalization to handle common environment variable formatting issues.
+ * Implements masked logging and diagnostic checks.
  */
-async function getServiceAccountToken(email: string, rawPrivateKey: string) {
+async function getServiceAccountToken(email: string, rawPrivateKey: string, traceId: string) {
+  // 1. Log Presence (Boolean only)
+  console.log(`[Chronos Auth][${traceId}] Validation: EmailPresent=${!!email}, KeyPresent=${!!rawPrivateKey}`);
+
   if (!rawPrivateKey) {
-    throw new Error('CHRONOS_SA_PRIVATE_KEY is missing.');
+    const err = new Error('CHRONOS_SA_PRIVATE_KEY is missing.');
+    (err as any).bucket = BUCKETS.MISSING_ENV;
+    throw err;
   }
 
-  // 1. Normalization
+  // 2. Masked Diagnostic Logging
+  const head = rawPrivateKey.substring(0, 30);
+  const tail = rawPrivateKey.substring(rawPrivateKey.length - 30);
+  console.log(`[Chronos Auth][${traceId}] Key Diagnostics:`);
+  console.log(`  - Head: "${head}..."`);
+  console.log(`  - Tail: "...${tail}"`);
+  console.log(`  - Contains Literal \\n: ${rawPrivateKey.includes('\\n')}`);
+  console.log(`  - Contains Real Newlines: ${rawPrivateKey.includes('\n')}`);
+
+  // 3. Normalization
   let normalizedKey = rawPrivateKey.trim();
-  
-  // Strip surrounding double quotes if present (often added by env loaders)
   if (normalizedKey.startsWith('"') && normalizedKey.endsWith('"')) {
     normalizedKey = normalizedKey.slice(1, -1);
   }
-
-  // Convert literal escaped characters to actual control characters
-  // Handle both Windows (\r\n) and Unix (\n) escaped literals
   normalizedKey = normalizedKey
     .replace(/\\r\\n/g, '\n')
     .replace(/\\n/g, '\n')
     .trim();
 
-  // 2. Safe Debug Logging
-  console.log(`[Chronos Auth] Normalized Key Stats:`, {
-    hasKey: true,
-    startsWithBegin: normalizedKey.startsWith('-----BEGIN PRIVATE KEY-----'),
-    endsWithEnd: normalizedKey.endsWith('-----END PRIVATE KEY-----'),
-    containsLiteralSlashN: rawPrivateKey.includes('\\n'),
-    containsRealNewlines: normalizedKey.includes('\n'),
-    keyLength: normalizedKey.length
-  });
+  const hasBegin = normalizedKey.startsWith('-----BEGIN PRIVATE KEY-----');
+  const hasEnd = normalizedKey.endsWith('-----END PRIVATE KEY-----');
+  console.log(`  - Normalized Markers: BEGIN=${hasBegin}, END=${hasEnd}`);
 
-  // 3. Fail Fast
-  if (!normalizedKey.startsWith('-----BEGIN PRIVATE KEY-----') || !normalizedKey.endsWith('-----END PRIVATE KEY-----')) {
-    throw new Error('Invalid private key format: Missing PEM markers (BEGIN/END PRIVATE KEY). Check CHRONOS_SA_PRIVATE_KEY.');
+  if (!hasBegin || !hasEnd) {
+    const err = new Error('Invalid private key format: Missing PEM markers (BEGIN/END).');
+    (err as any).bucket = BUCKETS.BAD_KEY_FORMAT;
+    throw err;
   }
 
   try {
@@ -54,45 +68,67 @@ async function getServiceAccountToken(email: string, rawPrivateKey: string) {
 
     const credentials = await client.getAccessToken();
     if (!credentials.token) {
-      throw new Error('Token exchange successful but returned an empty access token.');
+      const err = new Error('Token exchange successful but returned empty token.');
+      (err as any).bucket = BUCKETS.TOKEN_EXCHANGE_FAILED;
+      throw err;
     }
+    
+    console.log(`[Chronos Auth][${traceId}] Google auth success.`);
     return credentials.token;
   } catch (err: any) {
-    console.error('[Chronos Auth] Exchange Failed:', err.message);
-    throw new Error(`Google Authentication failed: ${err.message}`);
+    console.error(`[Chronos Auth][${traceId}] Exchange error:`, err.message);
+    if (!err.bucket) err.bucket = BUCKETS.TOKEN_EXCHANGE_FAILED;
+    throw err;
   }
 }
 
 export async function POST(req: NextRequest) {
+  const traceId = req.headers.get('x-forward-trace-id') || req.headers.get('x-request-id') || `trace-${Date.now()}`;
+  
   try {
+    console.log(`[Chronos Inbox][${traceId}] Incoming request received.`);
+    
     const authHeader = req.headers.get('x-chronos-key');
     const expectedKey = process.env.CHRONOS_INBOX_KEY;
 
     if (!expectedKey || authHeader !== expectedKey) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      console.warn(`[Chronos Inbox][${traceId}] Unauthorized access attempt.`);
+      return NextResponse.json({ 
+        ok: false, 
+        error: "Unauthorized", 
+        error_bucket: BUCKETS.UNAUTHORIZED,
+        trace_id: traceId 
+      }, { status: 401 });
     }
 
     const bodyText = await req.text();
     if (!bodyText || !bodyText.trim()) {
-      return NextResponse.json({ error: "Missing text payload" }, { status: 400 });
+      return NextResponse.json({ 
+        ok: false, 
+        error: "Missing text payload", 
+        error_bucket: BUCKETS.EXECUTION_FAILED,
+        trace_id: traceId 
+      }, { status: 400 });
     }
 
-    // 1. Parse OUTBOX_ID for idempotency
-    const outboxIdMatch = bodyText.match(/OUTBOX_ID:\s*([^\s\n\r]+)/i);
-    const outboxId = outboxIdMatch ? outboxIdMatch[1].trim() : null;
-
+    // 1. Env Check
     const saEmail = process.env.CHRONOS_SA_CLIENT_EMAIL;
     const saKey = process.env.CHRONOS_SA_PRIVATE_KEY;
     const calendarId = process.env.CHRONOS_CALENDAR_ID;
 
     if (!saEmail || !saKey || !calendarId) {
-      throw new Error("Missing SA_CLIENT_EMAIL, SA_PRIVATE_KEY, or CALENDAR_ID in environment.");
+      const err = new Error("Missing required environment variables (SA_EMAIL, SA_KEY, or CALENDAR_ID).");
+      (err as any).bucket = BUCKETS.MISSING_ENV;
+      throw err;
     }
 
-    // AUTH FIX: Use robust normalization within the exchange function
-    const saAccessToken = await getServiceAccountToken(saEmail, saKey);
+    // 2. Auth Stage
+    const saAccessToken = await getServiceAccountToken(saEmail, saKey, traceId);
 
-    // 2. Idempotency Check
+    // 3. Idempotency Check
+    const outboxIdMatch = bodyText.match(/OUTBOX_ID:\s*([^\s\n\r]+)/i);
+    const outboxId = outboxIdMatch ? outboxIdMatch[1].trim() : null;
+
     if (outboxId) {
       const fingerprintQuery = `OUTBOX_ID=${outboxId}`;
       const now = new Date();
@@ -103,17 +139,19 @@ export async function POST(req: NextRequest) {
       const exactMatch = existingEvents.find(ev => ev.description && ev.description.includes(fingerprintQuery));
       
       if (exactMatch) {
+        console.log(`[Chronos Inbox][${traceId}] Idempotent match. Event ID: ${exactMatch.id}`);
         return NextResponse.json({
           ok: true,
           outbox_id: outboxId,
           idempotent: true,
           event_id: exactMatch.id,
+          trace_id: traceId,
           action: exactMatch.summary.startsWith('[Task]') ? 'task_as_all_day_free_event' : 'timed_event'
         });
       }
     }
 
-    // 3. Process with AI
+    // 4. AI Processing Stage
     let userText = bodyText;
     const delimiterMatch = bodyText.match(/\n---\s*\n?([\s\S]*)$/);
     if (delimiterMatch) {
@@ -122,23 +160,35 @@ export async function POST(req: NextRequest) {
       userText = bodyText.replace(/OUTBOX_ID:\s*[^\n]*\n?/i, '').trim();
     }
 
-    const result = await processHeadlessAction(userText, saAccessToken, calendarId, outboxId || undefined);
+    console.log(`[Chronos Inbox][${traceId}] Processing with AI...`);
+    try {
+      const result = await processHeadlessAction(userText, saAccessToken, calendarId, outboxId || undefined);
+      console.log(`[Chronos Inbox][${traceId}] Created/Updated event. ID: ${result.eventId}`);
 
-    return NextResponse.json({
-      ok: true,
-      outbox_id: outboxId || "not_provided",
-      idempotent: false,
-      event_id: result.eventId,
-      action: result.action,
-      calendar_id: calendarId,
-      date: result.start.split('T')[0]
-    });
+      return NextResponse.json({
+        ok: true,
+        outbox_id: outboxId || "not_provided",
+        idempotent: false,
+        event_id: result.eventId,
+        action: result.action,
+        calendar_id: calendarId,
+        date: result.start.split('T')[0],
+        trace_id: traceId
+      });
+    } catch (aiErr: any) {
+      aiErr.bucket = BUCKETS.CALENDAR_WRITE_FAILED;
+      throw aiErr;
+    }
 
   } catch (error: any) {
-    console.error("[Inbox API Error]", error);
+    const bucket = error.bucket || BUCKETS.EXECUTION_FAILED;
+    console.error(`[Chronos Inbox][${traceId}][Bucket: ${bucket}] Error:`, error.message);
+    
     return NextResponse.json({ 
       ok: false,
-      error: error.message || "Execution failed"
+      error: error.message || "Execution failed",
+      error_bucket: bucket,
+      trace_id: traceId
     }, { status: 500 });
   }
 }
